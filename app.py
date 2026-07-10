@@ -215,7 +215,6 @@ def inject_css():
     @keyframes fadeIn { from {opacity:0;} to {opacity:1;} }
     @keyframes slideIn { from {opacity:0; transform: translateY(14px);} to {opacity:1; transform: translateY(0);} }
     @keyframes popIn { from {opacity:0; transform: scale(.92);} to {opacity:1; transform: scale(1);} }
-    @keyframes pulseWarn { 0% {transform: scale(1);} 50% {transform: scale(1.05);} 100% {transform: scale(1);} }
 
     .app-header {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -251,118 +250,142 @@ def inject_css():
     .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 8px 18px rgba(102,126,234,0.3); }
 
     [data-testid="stMetric"] { background: #f8f9fc; border-radius: 14px; padding: 12px 16px; border: 1px solid #eceefa; }
-
-    .timer-fixed-top-right {
-        position: fixed; top: 64px; right: 20px; z-index: 9999; font-size: 17px; font-weight: 700;
-        color: #33374d; background: #ffffff; padding: 10px 20px; border-radius: 10px;
-        border: 2px solid #e5e7f0; box-shadow: 0 6px 18px rgba(0,0,0,0.15); transition: all .3s ease;
-    }
-    .timer-warning { background: #fff4e0 !important; color: #d32f2f !important; border-color: #d32f2f !important; animation: pulseWarn 1.4s infinite; }
     </style>
     """, unsafe_allow_html=True)
 
 inject_css()
 
 # -----------------------------------------------------------------------------
-# 5. TIMER — real digital countdown clock.
-#    NOTE: <script> tags injected through st.markdown do NOT reliably execute
-#    (browsers ignore scripts inserted via innerHTML), which is why the old
-#    version just printed the raw code as text. components.html renders inside
-#    a real iframe, so the JS actually runs — and each rerun gets a fresh
-#    isolated iframe, so old intervals die automatically (no stacking/repeat beeps).
+# 5. TIMER — real digital countdown clock, pinned top-right, stays put on scroll.
+#
+#    Why the previous version broke scrolling: it made the *iframe itself*
+#    position:fixed and then reached up through several of Streamlit's own
+#    wrapper elements forcing height:0 / overflow:visible on them. Those
+#    wrapper elements are shared by Streamlit's own scroll container, so that
+#    hack occasionally collapsed the whole page's ability to scroll.
+#
+#    Fix: never touch Streamlit's own DOM. Instead, the script (running inside
+#    a tiny invisible iframe) reaches into the *parent* page and creates ONE
+#    independent <div> appended directly to <body>, completely outside
+#    Streamlit's layout tree. That div is what gets position:fixed + the
+#    countdown text, and pointer-events:none so it can never block clicks or
+#    scrolling on the page underneath it. This function is called on every
+#    rerun and simply shows/updates/removes that div based on session state.
 # -----------------------------------------------------------------------------
 def render_timer():
-    if not st.session_state.end_timestamp:
-        return
-    end_ms = int(st.session_state.end_timestamp * 1000)
+    show = bool(st.session_state.test_active and st.session_state.end_timestamp)
+    end_ms = int(st.session_state.end_timestamp * 1000) if st.session_state.end_timestamp else 0
     html_code = f"""
-    <div style="font-family:'Hind Siliguri','Segoe UI',sans-serif;">
-      <div id="timer_display" style="
-          font-size:26px; font-weight:800; letter-spacing:2px; color:#33374d;
-          background:#ffffff; padding:10px 26px; border-radius:14px;
-          border:2px solid #e5e7f0; box-shadow:0 6px 18px rgba(0,0,0,0.18);
-          transition:all .3s ease; font-variant-numeric:tabular-nums; text-align:center;">
-        ⏳ --:--
-      </div>
-    </div>
-    <style>
-      .timer-warning {{ background:#fff4e0 !important; color:#d32f2f !important; border-color:#d32f2f !important; animation:pulseWarn 1.4s infinite; }}
-      @keyframes pulseWarn {{ 0% {{transform:scale(1);}} 50% {{transform:scale(1.05);}} 100% {{transform:scale(1);}} }}
-    </style>
     <script>
-      // Break the iframe itself out of the normal page flow and pin it to the
-      // top-right of the browser window so it stays put while the page scrolls.
-      (function pinFrame() {{
-        try {{
-          var frame = window.frameElement;
-          if (!frame) return;
-          frame.style.position = 'fixed';
-          frame.style.top = '58px';
-          frame.style.right = '20px';
-          frame.style.width = '210px';
-          frame.style.height = '64px';
-          frame.style.zIndex = '999999';
-          frame.style.border = 'none';
-          frame.style.background = 'transparent';
-          var el = frame.parentElement;
-          for (var i = 0; i < 4 && el; i++) {{
-            el.style.height = '0px';
-            el.style.minHeight = '0px';
-            el.style.overflow = 'visible';
-            el.style.margin = '0px';
-            el = el.parentElement;
-          }}
-        }} catch (e) {{}}
-      }})();
+    (function() {{
+      try {{
+        var doc = window.parent.document;
+        var BADGE_ID = 'gk-live-timer-badge';
+        var show = {str(show).lower()};
 
-      var endTime = {end_ms};
-      var warned = false;
-      function playWarningSound() {{
-        try {{
-          var ctx = new (window.AudioContext || window.webkitAudioContext)();
-          function beep(delay) {{
-            setTimeout(function() {{
-              var osc = ctx.createOscillator();
-              var gain = ctx.createGain();
-              osc.connect(gain); gain.connect(ctx.destination);
-              osc.type = 'sine'; osc.frequency.value = 600;
-              gain.gain.setValueAtTime(0.1, ctx.currentTime);
-              osc.start();
-              setTimeout(function() {{ osc.stop(); }}, 300);
-            }}, delay);
+        if (!show) {{
+          var existing = doc.getElementById(BADGE_ID);
+          if (existing) existing.remove();
+          if (window.parent.__gkTimerInterval) {{
+            clearInterval(window.parent.__gkTimerInterval);
+            window.parent.__gkTimerInterval = null;
           }}
-          beep(0); beep(600); beep(1200);
-        }} catch (e) {{}}
-      }}
-      function tick() {{
-        var now = new Date().getTime();
-        var distance = endTime - now;
-        var display = document.getElementById("timer_display");
-        if (!display) return;
-        if (distance <= 0) {{
-          clearInterval(timerInterval);
-          display.innerHTML = "⏰ সময় শেষ!";
-          display.style.color = "#fff";
-          display.style.backgroundColor = "#D9534F";
-          display.style.borderColor = "#D9534F";
           return;
         }}
-        var minutes = Math.floor((distance % (1000*60*60)) / (1000*60));
-        var seconds = Math.floor((distance % (1000*60)) / 1000);
-        var mm = String(minutes).padStart(2, '0');
-        var ss = String(seconds).padStart(2, '0');
-        display.innerHTML = "⏳ " + mm + " : " + ss;
-        if (distance <= 300000 && !warned) {{
-          warned = true;
-          display.classList.add("timer-warning");
-          playWarningSound();
+
+        if (!doc.getElementById('gk-timer-style')) {{
+          var styleTag = doc.createElement('style');
+          styleTag.id = 'gk-timer-style';
+          styleTag.innerHTML = '@keyframes gkPulseWarn {{0%{{transform:scale(1);}}50%{{transform:scale(1.05);}}100%{{transform:scale(1);}}}}';
+          doc.head.appendChild(styleTag);
         }}
-      }}
-      tick();
-      var timerInterval = setInterval(tick, 1000);
+
+        var badge = doc.getElementById(BADGE_ID);
+        if (!badge) {{
+          badge = doc.createElement('div');
+          badge.id = BADGE_ID;
+          badge.style.position = 'fixed';
+          badge.style.top = '58px';
+          badge.style.right = '20px';
+          badge.style.zIndex = '999999';
+          badge.style.fontFamily = "'Hind Siliguri','Segoe UI',sans-serif";
+          badge.style.fontSize = '26px';
+          badge.style.fontWeight = '800';
+          badge.style.letterSpacing = '2px';
+          badge.style.color = '#33374d';
+          badge.style.background = '#ffffff';
+          badge.style.padding = '10px 26px';
+          badge.style.borderRadius = '14px';
+          badge.style.border = '2px solid #e5e7f0';
+          badge.style.boxShadow = '0 6px 18px rgba(0,0,0,0.18)';
+          badge.style.transition = 'background .3s ease, color .3s ease, border-color .3s ease';
+          badge.style.textAlign = 'center';
+          badge.style.pointerEvents = 'none';
+          doc.body.appendChild(badge);
+        }}
+
+        var endTime = {end_ms};
+        if (window.parent.__gkTimerEndTime !== endTime) {{
+          window.parent.__gkTimerEndTime = endTime;
+          window.parent.__gkTimerWarned = false;
+        }}
+        if (window.parent.__gkTimerInterval) {{
+          clearInterval(window.parent.__gkTimerInterval);
+        }}
+
+        function playWarningSound() {{
+          try {{
+            var ctx = new (window.AudioContext || window.webkitAudioContext)();
+            function beep(delay) {{
+              setTimeout(function() {{
+                var osc = ctx.createOscillator();
+                var gain = ctx.createGain();
+                osc.connect(gain); gain.connect(ctx.destination);
+                osc.type = 'sine'; osc.frequency.value = 600;
+                gain.gain.setValueAtTime(0.1, ctx.currentTime);
+                osc.start();
+                setTimeout(function() {{ osc.stop(); }}, 300);
+              }}, delay);
+            }}
+            beep(0); beep(600); beep(1200);
+          }} catch (e) {{}}
+        }}
+
+        function tick() {{
+          var b = doc.getElementById(BADGE_ID);
+          if (!b) return;
+          var now = new Date().getTime();
+          var distance = window.parent.__gkTimerEndTime - now;
+          if (distance <= 0) {{
+            clearInterval(window.parent.__gkTimerInterval);
+            b.innerHTML = '⏰ সময় শেষ!';
+            b.style.color = '#fff';
+            b.style.background = '#D9534F';
+            b.style.borderColor = '#D9534F';
+            b.style.animation = 'none';
+            return;
+          }}
+          var minutes = Math.floor((distance % (1000*60*60)) / (1000*60));
+          var seconds = Math.floor((distance % (1000*60)) / 1000);
+          var mm = String(minutes).padStart(2, '0');
+          var ss = String(seconds).padStart(2, '0');
+          b.innerHTML = '⏳ ' + mm + ' : ' + ss;
+          if (distance <= 300000 && !window.parent.__gkTimerWarned) {{
+            window.parent.__gkTimerWarned = true;
+            b.style.background = '#fff4e0';
+            b.style.color = '#d32f2f';
+            b.style.borderColor = '#d32f2f';
+            b.style.animation = 'gkPulseWarn 1.4s infinite';
+            playWarningSound();
+          }}
+        }}
+        tick();
+        window.parent.__gkTimerInterval = setInterval(tick, 1000);
+      }} catch (e) {{}}
+    }})();
     </script>
     """
-    components.html(html_code, height=1)
+    components.html(html_code, height=0)
 
 # -----------------------------------------------------------------------------
 # 6. SIDEBAR NAVIGATION
@@ -384,6 +407,10 @@ with st.sidebar:
 
 categories = get_categories()
 category_options = {name: cid for cid, name in categories}
+
+# Sync the floating countdown badge every rerun (shows/updates/removes itself
+# based on session state — see render_timer() for why this is safe for scrolling).
+render_timer()
 
 # -----------------------------------------------------------------------------
 # 7. MODE 1 — STUDY MODE (searchable, paginated for speed on large sets)
@@ -493,7 +520,6 @@ elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
         ) if st.session_state.total_attempted > 0 else 0
         col3.metric("বর্তমান স্কোর", f"{current_percentage:.1f}%")
 
-        render_timer()
         st.markdown("---")
 
         with st.sidebar:
