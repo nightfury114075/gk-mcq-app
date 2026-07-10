@@ -3,7 +3,7 @@ import psycopg2
 import pandas as pd
 
 # -----------------------------------------------------------------------------
-# 1. DATABASE CONNECTION SETUP (Production Version)
+# 1. DATABASE CONNECTION SETUP (Production Version with Auto-Reconnect)
 # -----------------------------------------------------------------------------
 @st.cache_resource
 def init_connection():
@@ -16,7 +16,15 @@ def init_connection():
         port=st.secrets.get("DB_PORT", "5432")
     )
 
+# --- THE PERMANENT FIX: Connection Ping & Auto-Reconnect ---
 try:
+    conn = init_connection()
+    # 'Knock' on the database to see if the connection is still alive
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT 1")
+except (psycopg2.OperationalError, psycopg2.InterfaceError):
+    # If Neon went to sleep and dropped the connection, clear cache and reconnect
+    st.cache_resource.clear()
     conn = init_connection()
 except Exception as e:
     st.error(f"Database Connection Error: {e}")
