@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import psycopg2
 from psycopg2 import pool as pg_pool
 import pandas as pd
@@ -168,7 +169,7 @@ def init_state():
         "total_attempted": 0,
         "correct_count": 0,
         "session_history": [],
-        "study_visible": 15,
+        "study_visible": 50,
         "study_state_key": "",
     }
     for k, v in defaults.items():
@@ -263,67 +264,80 @@ def inject_css():
 inject_css()
 
 # -----------------------------------------------------------------------------
-# 5. TIMER (client-side JS; fixed to avoid stacking intervals / repeat beeps)
+# 5. TIMER — real digital countdown clock.
+#    NOTE: <script> tags injected through st.markdown do NOT reliably execute
+#    (browsers ignore scripts inserted via innerHTML), which is why the old
+#    version just printed the raw code as text. components.html renders inside
+#    a real iframe, so the JS actually runs — and each rerun gets a fresh
+#    isolated iframe, so old intervals die automatically (no stacking/repeat beeps).
 # -----------------------------------------------------------------------------
 def render_timer():
     if not st.session_state.end_timestamp:
         return
     end_ms = int(st.session_state.end_timestamp * 1000)
-    st.markdown(f"""
-        <div class="timer-fixed-top-right" id="timer_display">⏳ হিসাব করা হচ্ছে...</div>
-        <script>
-        (function() {{
-            var endTime = {end_ms};
-            if (window.gkTimerEndTime !== endTime) {{
-                window.gkTimerEndTime = endTime;
-                window.gkTimerWarned = false;
-            }}
-            if (window.gkTimerInterval) {{ clearInterval(window.gkTimerInterval); }}
-
-            function playWarningSound() {{
-                try {{
-                    var ctx = new (window.AudioContext || window.webkitAudioContext)();
-                    function beep(delay) {{
-                        setTimeout(function() {{
-                            var osc = ctx.createOscillator();
-                            var gain = ctx.createGain();
-                            osc.connect(gain); gain.connect(ctx.destination);
-                            osc.type = 'sine'; osc.frequency.value = 600;
-                            gain.gain.setValueAtTime(0.1, ctx.currentTime);
-                            osc.start();
-                            setTimeout(function() {{ osc.stop(); }}, 300);
-                        }}, delay);
-                    }}
-                    beep(0); beep(600); beep(1200);
-                }} catch (e) {{}}
-            }}
-
-            window.gkTimerInterval = setInterval(function() {{
-                var now = new Date().getTime();
-                var distance = window.gkTimerEndTime - now;
-                var display = document.getElementById("timer_display");
-                if (!display) return;
-
-                if (distance < 0) {{
-                    clearInterval(window.gkTimerInterval);
-                    display.innerHTML = "⏰ সময় শেষ!";
-                    display.style.color = "white";
-                    display.style.backgroundColor = "#D9534F";
-                    display.style.animation = "none";
-                }} else {{
-                    var minutes = Math.floor((distance % (1000*60*60)) / (1000*60));
-                    var seconds = Math.floor((distance % (1000*60)) / 1000);
-                    display.innerHTML = "⏳ বাকি: " + minutes + " মি " + seconds + " সে";
-                    if (distance <= 300000 && !window.gkTimerWarned) {{
-                        window.gkTimerWarned = true;
-                        display.classList.add("timer-warning");
-                        playWarningSound();
-                    }}
-                }}
-            }}, 1000);
-        }})();
-        </script>
-    """, unsafe_allow_html=True)
+    html_code = f"""
+    <div style="font-family:'Hind Siliguri','Segoe UI',sans-serif; display:flex; justify-content:center;">
+      <div id="timer_display" style="
+          font-size:30px; font-weight:800; letter-spacing:2px; color:#33374d;
+          background:#ffffff; padding:12px 34px; border-radius:14px;
+          border:2px solid #e5e7f0; box-shadow:0 6px 18px rgba(0,0,0,0.12);
+          transition:all .3s ease; font-variant-numeric:tabular-nums;">
+        ⏳ --:--
+      </div>
+    </div>
+    <style>
+      .timer-warning {{ background:#fff4e0 !important; color:#d32f2f !important; border-color:#d32f2f !important; animation:pulseWarn 1.4s infinite; }}
+      @keyframes pulseWarn {{ 0% {{transform:scale(1);}} 50% {{transform:scale(1.05);}} 100% {{transform:scale(1);}} }}
+    </style>
+    <script>
+      var endTime = {end_ms};
+      var warned = false;
+      function playWarningSound() {{
+        try {{
+          var ctx = new (window.AudioContext || window.webkitAudioContext)();
+          function beep(delay) {{
+            setTimeout(function() {{
+              var osc = ctx.createOscillator();
+              var gain = ctx.createGain();
+              osc.connect(gain); gain.connect(ctx.destination);
+              osc.type = 'sine'; osc.frequency.value = 600;
+              gain.gain.setValueAtTime(0.1, ctx.currentTime);
+              osc.start();
+              setTimeout(function() {{ osc.stop(); }}, 300);
+            }}, delay);
+          }}
+          beep(0); beep(600); beep(1200);
+        }} catch (e) {{}}
+      }}
+      function tick() {{
+        var now = new Date().getTime();
+        var distance = endTime - now;
+        var display = document.getElementById("timer_display");
+        if (!display) return;
+        if (distance <= 0) {{
+          clearInterval(timerInterval);
+          display.innerHTML = "⏰ সময় শেষ!";
+          display.style.color = "#fff";
+          display.style.backgroundColor = "#D9534F";
+          display.style.borderColor = "#D9534F";
+          return;
+        }}
+        var minutes = Math.floor((distance % (1000*60*60)) / (1000*60));
+        var seconds = Math.floor((distance % (1000*60)) / 1000);
+        var mm = String(minutes).padStart(2, '0');
+        var ss = String(seconds).padStart(2, '0');
+        display.innerHTML = "⏳ " + mm + " : " + ss;
+        if (distance <= 300000 && !warned) {{
+          warned = true;
+          display.classList.add("timer-warning");
+          playWarningSound();
+        }}
+      }}
+      tick();
+      var timerInterval = setInterval(tick, 1000);
+    </script>
+    """
+    components.html(html_code, height=75)
 
 # -----------------------------------------------------------------------------
 # 6. SIDEBAR NAVIGATION
@@ -363,7 +377,7 @@ if app_mode == "পড়াশোনা (Study Mode)":
     state_key = f"{selected_cat_name}::{search_term}"
     if st.session_state.study_state_key != state_key:
         st.session_state.study_state_key = state_key
-        st.session_state.study_visible = 15
+        st.session_state.study_visible = 50
 
     filtered = df[df["question_text"].str.contains(search_term, case=False, na=False)] if search_term else df
     grouped = group_questions(filtered)
@@ -388,9 +402,15 @@ if app_mode == "পড়াশোনা (Study Mode)":
 
         if st.session_state.study_visible < total_found:
             remaining = total_found - st.session_state.study_visible
-            if st.button(f"⬇️ আরও দেখুন ({remaining} টি বাকি)", use_container_width=True):
-                st.session_state.study_visible += 15
-                st.rerun()
+            btn_col1, btn_col2 = st.columns(2)
+            with btn_col1:
+                if st.button(f"⬇️ আরও ১০০টি দেখুন ({remaining} টি বাকি)", use_container_width=True):
+                    st.session_state.study_visible += 100
+                    st.rerun()
+            with btn_col2:
+                if st.button(f"🔽 সবগুলো একসাথে দেখুন ({total_found} টি)", use_container_width=True):
+                    st.session_state.study_visible = total_found
+                    st.rerun()
 
 # -----------------------------------------------------------------------------
 # 8. MODE 2 — LIVE MCQ TEST (batched question bank = zero per-question DB calls)
