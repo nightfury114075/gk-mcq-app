@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import psycopg2
 import pandas as pd
 import time
@@ -120,111 +121,126 @@ def reset_test_state():
     st.session_state.session_history = []
     st.session_state.current_q_id = None
 
-# --- JAVASCRIPT TIMER INJECTION (FIXED TO TOP RIGHT WITH SOUND) ---
-def render_timer():
-    if st.session_state.end_timestamp:
-        st.markdown(f"""
-            <style>
-            .timer-fixed-top-right {{
-                position: fixed;
-                top: 60px; /* Positions below the header */
-                right: 20px;
-                z-index: 9999;
-                font-size: 18px;
-                font-weight: bold;
-                color: #333;
-                background-color: #ffffff;
-                padding: 10px 20px;
-                border-radius: 8px;
-                border: 2px solid #ddd;
-                box-shadow: 0px 4px 10px rgba(0,0,0,0.2);
-                transition: all 0.3s ease;
-            }}
-            .timer-warning {{
-                background-color: #ffeb3b !important;
-                color: #d32f2f !important;
-                border-color: #d32f2f !important;
-                animation: pulse 1.5s infinite;
-            }}
-            @keyframes pulse {{
-                0% {{ transform: scale(1); }}
-                50% {{ transform: scale(1.05); }}
-                100% {{ transform: scale(1); }}
-            }}
-            </style>
-            <div class="timer-fixed-top-right" id="timer_display">⏳ হিসাব করা হচ্ছে...</div>
-            <script>
-            var endTime = {st.session_state.end_timestamp * 1000};
-            var warned = false;
+# --- ISOLATED JAVASCRIPT TIMER COMPONENT ---
+def render_timer(end_timestamp):
+    if not end_timestamp:
+        return
+        
+    js_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <style>
+    body {{ margin: 0; padding: 0; font-family: sans-serif; display: flex; justify-content: flex-end; align-items: center; }}
+    .timer-container {{
+        background-color: #ffffff; border: 2px solid #e0e0e0;
+        border-radius: 8px; padding: 12px 15px; font-size: 18px;
+        font-weight: bold; color: #333; text-align: center; width: 100%;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05); transition: all 0.3s ease;
+    }}
+    .timer-warning {{
+        background-color: #ffeb3b !important; color: #d32f2f !important;
+        border-color: #d32f2f !important; animation: pulse 1s infinite;
+    }}
+    @keyframes pulse {{
+        0% {{ transform: scale(1); }}
+        50% {{ transform: scale(1.02); }}
+        100% {{ transform: scale(1); }}
+    }}
+    </style>
+    </head>
+    <body>
+    <div class="timer-container" id="timer_display">⏳ হিসাব করা হচ্ছে...</div>
+    
+    <script>
+    var endTime = {end_timestamp * 1000};
+    var warned = false;
 
-            // Function to play 3 warning beeps
-            function playWarningSound() {{
-                var context = new (window.AudioContext || window.webkitAudioContext)();
-                function beep(delay) {{
-                    setTimeout(function() {{
-                        var oscillator = context.createOscillator();
-                        var gainNode = context.createGain();
-                        oscillator.connect(gainNode);
-                        gainNode.connect(context.destination);
-                        oscillator.type = 'sine';
-                        oscillator.frequency.value = 600; // Pitch
-                        gainNode.gain.setValueAtTime(0.1, context.currentTime); // Volume
-                        oscillator.start();
-                        setTimeout(function() {{ oscillator.stop(); }}, 300); // Duration
-                    }}, delay);
-                }}
-                beep(0);
-                beep(600);
-                beep(1200);
-            }}
+    function playWarningSound() {{
+        var context = new (window.AudioContext || window.webkitAudioContext)();
+        function beep(delay) {{
+            setTimeout(function() {{
+                var oscillator = context.createOscillator();
+                var gainNode = context.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(context.destination);
+                oscillator.type = 'sine';
+                oscillator.frequency.value = 600; // Pitch
+                gainNode.gain.setValueAtTime(0.1, context.currentTime); // Volume
+                oscillator.start();
+                setTimeout(function() {{ oscillator.stop(); }}, 300); // Duration
+            }}, delay);
+        }}
+        beep(0); beep(600); beep(1200);
+    }}
 
-            var timerInterval = setInterval(function() {{
-                var now = new Date().getTime();
-                var distance = endTime - now;
-                var display = document.getElementById("timer_display");
-                
-                if (distance < 0) {{
-                    clearInterval(timerInterval);
-                    display.innerHTML = "⏰ সময় শেষ!";
-                    display.style.color = "white";
-                    display.style.backgroundColor = "#D9534F";
-                    display.style.animation = "none";
-                }} else {{
-                    var minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
-                    var seconds = Math.floor((distance % (1000 * 60)) / 1000);
-                    display.innerHTML = "⏳ বাকি: " + minutes + " মি " + seconds + " সে";
-                    
-                    // Trigger warning when exactly 5 minutes (300,000 ms) are left
-                    if (distance <= 300000 && distance > 0 && !warned) {{
-                        warned = true;
-                        display.classList.add("timer-warning");
-                        playWarningSound();
-                    }}
-                }}
-            }}, 1000);
-            </script>
-        """, unsafe_allow_html=True)
+    var timerInterval = setInterval(function() {{
+        var now = new Date().getTime();
+        var distance = endTime - now;
+        var display = document.getElementById("timer_display");
+        
+        if (distance < 0) {{
+            clearInterval(timerInterval);
+            display.innerHTML = "⏰ সময় শেষ!";
+            display.style.color = "white";
+            display.style.backgroundColor = "#D9534F";
+            display.style.animation = "none";
+        }} else {{
+            var minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+            var seconds = Math.floor((distance % (1000 * 60)) / 1000);
+            
+            // Format to 00:00
+            var secStr = seconds < 10 ? "0" + seconds : seconds;
+            var minStr = minutes < 10 ? "0" + minutes : minutes;
+            display.innerHTML = "⏳ বাকি: " + minStr + ":" + secStr;
+            
+            // Maintain warning styling under 5 mins
+            if (distance <= 300000 && distance > 0) {{
+                display.classList.add("timer-warning");
+            }}
+            
+            // Play sound ONLY in the exact 2-second window when it hits 5 mins
+            if (distance <= 300000 && distance > 298000 && !warned) {{
+                warned = true;
+                playWarningSound();
+            }}
+        }}
+    }}, 1000);
+    </script>
+    </body>
+    </html>
+    """
+    # Use Streamlit Components to run the HTML/JS safely
+    components.html(js_code, height=65)
 
 # -----------------------------------------------------------------------------
 # 4. USER INTERFACE RENDERING
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="GK Exam Engine", page_icon="📚", layout="wide")
 
-# --- CSS INJECTION FOR LARGE TEXT & RADIO BUTTONS ---
+# --- CSS INJECTION: TARGETED SIZING ---
 st.markdown("""
     <style>
-    /* Make Radio Button text large */
-    .stRadio p {
+    /* 1. Ensure Sidebar text remains small and default */
+    [data-testid="stSidebar"] .stRadio p, [data-testid="stSidebar"] label {
+        font-size: 16px !important;
+        line-height: normal !important;
+    }
+    
+    /* 2. Make Main Content Radio Buttons (MCQ options) Large */
+    [data-testid="stMainBlockContainer"] .stRadio p {
         font-size: 22px !important;
         line-height: 1.6 !important;
         padding-top: 5px;
         padding-bottom: 5px;
     }
-    /* Increase space between options */
-    .stRadio > div {
+    
+    /* 3. Increase space between options only in main block */
+    [data-testid="stMainBlockContainer"] .stRadio > div {
         gap: 15px;
     }
-    /* Large custom question text class */
+    
+    /* 4. Large custom question text class */
     .big-question {
         font-size: 26px;
         font-weight: 700;
@@ -307,14 +323,17 @@ elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
         st.header("✍️ লাইভ সেলফ-অ্যাসেসমেন্ট")
         total_q = len(st.session_state.question_queue)
         
-        col1, col2, col3 = st.columns(3)
+        # Modified Layout: 4 Columns to place timer perfectly at Top Right
+        col1, col2, col3, col_timer = st.columns([1, 1, 1, 1.5])
         col1.metric(f"প্রশ্ন: {st.session_state.current_q_index} / {total_q}", "চলমান")
         col2.metric("সঠিক উত্তর", st.session_state.correct_count)
         current_percentage = (st.session_state.correct_count / st.session_state.total_attempted * 100) if st.session_state.total_attempted > 0 else 0
         col3.metric("বর্তমান স্কোর (%)", f"{current_percentage:.1f}%")
         
-        # Render the fixed Timer
-        render_timer()
+        with col_timer:
+            if st.session_state.end_timestamp:
+                render_timer(st.session_state.end_timestamp)
+                
         st.markdown("---")
 
         if st.sidebar.button("💾 পরীক্ষা শেষ ও সেভ করুন", type="primary"):
@@ -338,7 +357,7 @@ elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
                 st.subheader(f"প্রশ্ন নং {st.session_state.current_q_index + 1}")
                 if st.session_state.current_q_text:
                     with st.container(border=True):
-                        # Modified: Custom Large Question Text
+                        # Use the custom large font class for questions
                         st.markdown(f'<div class="big-question">{st.session_state.current_q_text}</div>', unsafe_allow_html=True)
                         
                         option_labels = [opt[0] for opt in st.session_state.current_options]
