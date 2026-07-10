@@ -38,7 +38,6 @@ def get_categories():
         return cursor.fetchall()
 
 def get_all_questions_by_category(category_id):
-    # Added: ORDER BY q.question_id ASC to keep input order
     query = """
         SELECT q.question_text, q.explanation, 
                string_agg(o.option_text || (CASE WHEN o.is_correct THEN ' (সঠিক)' ELSE '' END), ' | ') as all_options
@@ -51,7 +50,6 @@ def get_all_questions_by_category(category_id):
     return pd.read_sql_query(query, conn, params=(category_id,))
 
 def get_randomized_question_ids(category_id=None):
-    """Fetches all possible question IDs in random order."""
     with conn.cursor() as cursor:
         if category_id:
             cursor.execute("SELECT question_id FROM questions WHERE category_id = %s ORDER BY RANDOM();", (category_id,))
@@ -60,7 +58,6 @@ def get_randomized_question_ids(category_id=None):
         return [row[0] for row in cursor.fetchall()]
 
 def get_mcq_by_id(q_id):
-    """Fetches a specific question and its options by ID."""
     with conn.cursor() as cursor:
         cursor.execute("SELECT question_id, question_text, explanation FROM questions WHERE question_id = %s;", (q_id,))
         question = cursor.fetchone()
@@ -89,9 +86,9 @@ def get_history():
 # -----------------------------------------------------------------------------
 if "test_active" not in st.session_state:
     st.session_state.test_active = False
-    st.session_state.question_queue = []     # Holds the randomized IDs for this session
-    st.session_state.current_q_index = 0     # Tracks which question we are on
-    st.session_state.end_timestamp = None    # For the countdown timer
+    st.session_state.question_queue = []
+    st.session_state.current_q_index = 0
+    st.session_state.end_timestamp = None
     st.session_state.test_type_label = ""
     
     st.session_state.current_q_id = None
@@ -103,7 +100,6 @@ if "test_active" not in st.session_state:
     st.session_state.session_history = [] 
 
 def load_current_mcq():
-    """Loads the question from the queue based on current index."""
     if st.session_state.current_q_index < len(st.session_state.question_queue):
         q_id = st.session_state.question_queue[st.session_state.current_q_index]
         q_id, q_text, q_explain, options = get_mcq_by_id(q_id)
@@ -112,7 +108,7 @@ def load_current_mcq():
         st.session_state.current_q_explain = q_explain
         st.session_state.current_options = options
     else:
-        st.session_state.current_q_id = None # End of test
+        st.session_state.current_q_id = None
 
 def reset_test_state():
     st.session_state.test_active = False
@@ -124,33 +120,86 @@ def reset_test_state():
     st.session_state.session_history = []
     st.session_state.current_q_id = None
 
-# --- JAVASCRIPT TIMER INJECTION ---
+# --- JAVASCRIPT TIMER INJECTION (FIXED TO TOP RIGHT WITH SOUND) ---
 def render_timer():
     if st.session_state.end_timestamp:
         st.markdown(f"""
             <style>
-            .timer-box {{
-                font-size: 16px; font-weight: bold; color: #555;
-                padding: 10px; border-radius: 8px; border: 1px solid #ddd;
-                text-align: center; margin-bottom: 20px; background-color: #f9f9f9;
-                transition: all 0.3s;
+            .timer-fixed-top-right {{
+                position: fixed;
+                top: 60px; /* Positions below the header */
+                right: 20px;
+                z-index: 9999;
+                font-size: 18px;
+                font-weight: bold;
+                color: #333;
+                background-color: #ffffff;
+                padding: 10px 20px;
+                border-radius: 8px;
+                border: 2px solid #ddd;
+                box-shadow: 0px 4px 10px rgba(0,0,0,0.2);
+                transition: all 0.3s ease;
+            }}
+            .timer-warning {{
+                background-color: #ffeb3b !important;
+                color: #d32f2f !important;
+                border-color: #d32f2f !important;
+                animation: pulse 1.5s infinite;
+            }}
+            @keyframes pulse {{
+                0% {{ transform: scale(1); }}
+                50% {{ transform: scale(1.05); }}
+                100% {{ transform: scale(1); }}
             }}
             </style>
-            <div class="timer-box" id="timer_display">⏳ হিসাব করা হচ্ছে...</div>
+            <div class="timer-fixed-top-right" id="timer_display">⏳ হিসাব করা হচ্ছে...</div>
             <script>
             var endTime = {st.session_state.end_timestamp * 1000};
+            var warned = false;
+
+            // Function to play 3 warning beeps
+            function playWarningSound() {{
+                var context = new (window.AudioContext || window.webkitAudioContext)();
+                function beep(delay) {{
+                    setTimeout(function() {{
+                        var oscillator = context.createOscillator();
+                        var gainNode = context.createGain();
+                        oscillator.connect(gainNode);
+                        gainNode.connect(context.destination);
+                        oscillator.type = 'sine';
+                        oscillator.frequency.value = 600; // Pitch
+                        gainNode.gain.setValueAtTime(0.1, context.currentTime); // Volume
+                        oscillator.start();
+                        setTimeout(function() {{ oscillator.stop(); }}, 300); // Duration
+                    }}, delay);
+                }}
+                beep(0);
+                beep(600);
+                beep(1200);
+            }}
+
             var timerInterval = setInterval(function() {{
                 var now = new Date().getTime();
                 var distance = endTime - now;
+                var display = document.getElementById("timer_display");
+                
                 if (distance < 0) {{
                     clearInterval(timerInterval);
-                    document.getElementById("timer_display").innerHTML = "⏰ সময় শেষ! দয়া করে পরীক্ষা সেভ করুন।";
-                    document.getElementById("timer_display").style.color = "white";
-                    document.getElementById("timer_display").style.backgroundColor = "#D9534F";
+                    display.innerHTML = "⏰ সময় শেষ!";
+                    display.style.color = "white";
+                    display.style.backgroundColor = "#D9534F";
+                    display.style.animation = "none";
                 }} else {{
                     var minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
                     var seconds = Math.floor((distance % (1000 * 60)) / 1000);
-                    document.getElementById("timer_display").innerHTML = "⏳ সময় বাকি: " + minutes + " মিনিট " + seconds + " সেকেন্ড";
+                    display.innerHTML = "⏳ বাকি: " + minutes + " মি " + seconds + " সে";
+                    
+                    // Trigger warning when exactly 5 minutes (300,000 ms) are left
+                    if (distance <= 300000 && distance > 0 && !warned) {{
+                        warned = true;
+                        display.classList.add("timer-warning");
+                        playWarningSound();
+                    }}
                 }}
             }}, 1000);
             </script>
@@ -160,6 +209,32 @@ def render_timer():
 # 4. USER INTERFACE RENDERING
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="GK Exam Engine", page_icon="📚", layout="wide")
+
+# --- CSS INJECTION FOR LARGE TEXT & RADIO BUTTONS ---
+st.markdown("""
+    <style>
+    /* Make Radio Button text large */
+    .stRadio p {
+        font-size: 22px !important;
+        line-height: 1.6 !important;
+        padding-top: 5px;
+        padding-bottom: 5px;
+    }
+    /* Increase space between options */
+    .stRadio > div {
+        gap: 15px;
+    }
+    /* Large custom question text class */
+    .big-question {
+        font-size: 26px;
+        font-weight: 700;
+        line-height: 1.5;
+        color: #1a1a1a;
+        margin-bottom: 20px;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 st.title("📚 সাধারণ জ্ঞান (GK) লার্নিং পোর্টাল")
 st.markdown("---")
 
@@ -190,7 +265,6 @@ if app_mode == "পড়াশোনা (Study Mode)":
 # --- MODE 2: LIVE MCQ TEST ---
 elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
     
-    # SETUP PHASE: Before starting the exam
     if not st.session_state.test_active:
         st.header("⚙️ পরীক্ষার সেটিংস")
         with st.container(border=True):
@@ -216,10 +290,9 @@ elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
                 if not all_ids:
                     st.error("দুঃখিত, এই সেকশনে কোনো প্রশ্ন পাওয়া যায়নি।")
                 else:
-                    # Setup Session State
                     st.session_state.test_active = True
                     st.session_state.test_type_label = test_type
-                    st.session_state.question_queue = all_ids[:q_limit] # Slice to user limit
+                    st.session_state.question_queue = all_ids[:q_limit]
                     st.session_state.current_q_index = 0
                     
                     if t_limit > 0:
@@ -230,30 +303,26 @@ elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
                     load_current_mcq()
                     st.rerun()
 
-    # ACTIVE EXAM PHASE: Running the test
     else:
         st.header("✍️ লাইভ সেলফ-অ্যাসেসমেন্ট")
         total_q = len(st.session_state.question_queue)
         
-        # Top Scoreboard & Controls
         col1, col2, col3 = st.columns(3)
         col1.metric(f"প্রশ্ন: {st.session_state.current_q_index} / {total_q}", "চলমান")
         col2.metric("সঠিক উত্তর", st.session_state.correct_count)
         current_percentage = (st.session_state.correct_count / st.session_state.total_attempted * 100) if st.session_state.total_attempted > 0 else 0
         col3.metric("বর্তমান স্কোর (%)", f"{current_percentage:.1f}%")
         
-        # Render the Javascript Timer
+        # Render the fixed Timer
         render_timer()
         st.markdown("---")
 
-        # Sidebar Save & Exit Option
         if st.sidebar.button("💾 পরীক্ষা শেষ ও সেভ করুন", type="primary"):
             save_test_score(st.session_state.test_type_label, st.session_state.total_attempted, st.session_state.correct_count, current_percentage)
             reset_test_state()
             st.sidebar.success("স্কোর সেভ হয়েছে! প্রগতি ট্যাবে চেক করুন।")
             st.rerun()
 
-        # Check if test is completed
         if st.session_state.current_q_index >= total_q or st.session_state.current_q_id is None:
             st.success("🎉 অভিনন্দন! আপনি নির্বাচিত সবগুলো প্রশ্নের উত্তর দিয়েছেন।")
             st.balloons()
@@ -263,16 +332,16 @@ elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
                 st.rerun()
                 
         else:
-            # Active Question UI
             col_main, col_review = st.columns([1.5, 1], gap="large")
 
             with col_main:
                 st.subheader(f"প্রশ্ন নং {st.session_state.current_q_index + 1}")
                 if st.session_state.current_q_text:
                     with st.container(border=True):
-                        st.markdown(f"### {st.session_state.current_q_text}")
-                        option_labels = [opt[0] for opt in st.session_state.current_options]
+                        # Modified: Custom Large Question Text
+                        st.markdown(f'<div class="big-question">{st.session_state.current_q_text}</div>', unsafe_allow_html=True)
                         
+                        option_labels = [opt[0] for opt in st.session_state.current_options]
                         radio_key = f"radio_{st.session_state.current_q_id}"
                         user_choice = st.radio("আপনার উত্তর বেছে নিন:", option_labels, index=None, key=radio_key)
                         
@@ -280,7 +349,6 @@ elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
                             correct_answer = next(opt[0] for opt in st.session_state.current_options if opt[1] is True)
                             is_correct = (user_choice == correct_answer)
                             
-                            # Save to review history
                             st.session_state.session_history.insert(0, {
                                 "question": st.session_state.current_q_text,
                                 "user_choice": user_choice,
@@ -289,7 +357,6 @@ elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
                                 "is_correct": is_correct
                             })
                             
-                            # Update Scores & Index
                             st.session_state.total_attempted += 1
                             if is_correct:
                                 st.session_state.correct_count += 1
