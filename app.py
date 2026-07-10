@@ -276,12 +276,12 @@ def render_timer():
         return
     end_ms = int(st.session_state.end_timestamp * 1000)
     html_code = f"""
-    <div style="font-family:'Hind Siliguri','Segoe UI',sans-serif; display:flex; justify-content:center;">
+    <div style="font-family:'Hind Siliguri','Segoe UI',sans-serif;">
       <div id="timer_display" style="
-          font-size:30px; font-weight:800; letter-spacing:2px; color:#33374d;
-          background:#ffffff; padding:12px 34px; border-radius:14px;
-          border:2px solid #e5e7f0; box-shadow:0 6px 18px rgba(0,0,0,0.12);
-          transition:all .3s ease; font-variant-numeric:tabular-nums;">
+          font-size:26px; font-weight:800; letter-spacing:2px; color:#33374d;
+          background:#ffffff; padding:10px 26px; border-radius:14px;
+          border:2px solid #e5e7f0; box-shadow:0 6px 18px rgba(0,0,0,0.18);
+          transition:all .3s ease; font-variant-numeric:tabular-nums; text-align:center;">
         ⏳ --:--
       </div>
     </div>
@@ -290,6 +290,31 @@ def render_timer():
       @keyframes pulseWarn {{ 0% {{transform:scale(1);}} 50% {{transform:scale(1.05);}} 100% {{transform:scale(1);}} }}
     </style>
     <script>
+      // Break the iframe itself out of the normal page flow and pin it to the
+      // top-right of the browser window so it stays put while the page scrolls.
+      (function pinFrame() {{
+        try {{
+          var frame = window.frameElement;
+          if (!frame) return;
+          frame.style.position = 'fixed';
+          frame.style.top = '58px';
+          frame.style.right = '20px';
+          frame.style.width = '210px';
+          frame.style.height = '64px';
+          frame.style.zIndex = '999999';
+          frame.style.border = 'none';
+          frame.style.background = 'transparent';
+          var el = frame.parentElement;
+          for (var i = 0; i < 4 && el; i++) {{
+            el.style.height = '0px';
+            el.style.minHeight = '0px';
+            el.style.overflow = 'visible';
+            el.style.margin = '0px';
+            el = el.parentElement;
+          }}
+        }} catch (e) {{}}
+      }})();
+
       var endTime = {end_ms};
       var warned = false;
       function playWarningSound() {{
@@ -337,7 +362,7 @@ def render_timer():
       var timerInterval = setInterval(tick, 1000);
     </script>
     """
-    components.html(html_code, height=75)
+    components.html(html_code, height=1)
 
 # -----------------------------------------------------------------------------
 # 6. SIDEBAR NAVIGATION
