@@ -81,16 +81,27 @@ def get_categories():
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_all_questions_by_category(category_id):
-    query = """
-        SELECT q.question_id, q.question_text, q.explanation, q.source_url,
-               o.option_text, o.is_correct
-        FROM questions q
-        JOIN options o ON q.question_id = o.question_id
-        WHERE q.category_id = %s
-        ORDER BY q.question_id ASC;
-    """
-    with get_raw_conn() as conn:
-        return pd.read_sql_query(query, conn, params=(category_id,))
+    if category_id is None:
+        query = """
+            SELECT q.question_id, q.question_text, q.explanation, q.source_url,
+                   o.option_text, o.is_correct
+            FROM questions q
+            JOIN options o ON q.question_id = o.question_id
+            ORDER BY q.question_id ASC;
+        """
+        with get_raw_conn() as conn:
+            return pd.read_sql_query(query, conn)
+    else:
+        query = """
+            SELECT q.question_id, q.question_text, q.explanation, q.source_url,
+                   o.option_text, o.is_correct
+            FROM questions q
+            JOIN options o ON q.question_id = o.question_id
+            WHERE q.category_id = %s
+            ORDER BY q.question_id ASC;
+        """
+        with get_raw_conn() as conn:
+            return pd.read_sql_query(query, conn, params=(category_id,))
 
 def group_questions(df):
     grouped = []
@@ -262,20 +273,6 @@ inject_css()
 
 # -----------------------------------------------------------------------------
 # 5. TIMER — real digital countdown clock, pinned top-right, stays put on scroll.
-#
-#    Why the previous version broke scrolling: it made the *iframe itself*
-#    position:fixed and then reached up through several of Streamlit's own
-#    wrapper elements forcing height:0 / overflow:visible on them. Those
-#    wrapper elements are shared by Streamlit's own scroll container, so that
-#    hack occasionally collapsed the whole page's ability to scroll.
-#
-#    Fix: never touch Streamlit's own DOM. Instead, the script (running inside
-#    a tiny invisible iframe) reaches into the *parent* page and creates ONE
-#    independent <div> appended directly to <body>, completely outside
-#    Streamlit's layout tree. That div is what gets position:fixed + the
-#    countdown text, and pointer-events:none so it can never block clicks or
-#    scrolling on the page underneath it. This function is called on every
-#    rerun and simply shows/updates/removes that div based on session state.
 # -----------------------------------------------------------------------------
 def render_timer():
     show = bool(st.session_state.test_active and st.session_state.end_timestamp)
@@ -411,10 +408,11 @@ with st.sidebar:
         st.rerun()
 
 categories = get_categories()
-category_options = {name: cid for cid, name in categories}
+category_options = {"সবগুলো ক্যাটাগরি (All)": None}
+for cid, name in categories:
+    category_options[name] = cid
 
-# Sync the floating countdown badge every rerun (shows/updates/removes itself
-# based on session state — see render_timer() for why this is safe for scrolling).
+# Sync the floating countdown badge every rerun
 render_timer()
 
 # -----------------------------------------------------------------------------
