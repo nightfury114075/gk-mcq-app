@@ -265,7 +265,7 @@ def inject_css():
 
     [data-testid="stMetric"] { background: #f8f9fc; border-radius: 14px; padding: 12px 16px; border: 1px solid #eceefa; }
 
-    .source-link-icon { text-decoration: none; margin-left: 8px; font-size: 15px; }
+    .source-link-icon { text-decoration: none !important; margin-left: 8px; font-size: 15px; }
     </style>
     """, unsafe_allow_html=True)
 
