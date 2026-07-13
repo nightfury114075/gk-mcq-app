@@ -17,7 +17,7 @@ import extra_streamlit_components as stx
 st.set_page_config(page_title="GK Exam Engine", page_icon="📚", layout="wide", initial_sidebar_state="expanded")
 
 # -----------------------------------------------------------------------------
-# 0.5. PASSWORD AUTHENTICATION (7 Days Memory via Cookies - Fixed)
+# 0.5. PASSWORD AUTHENTICATION (7 Days Memory via Cookies - Fixed KeyError)
 # -----------------------------------------------------------------------------
 cookie_manager = stx.CookieManager()
 
@@ -39,7 +39,10 @@ def check_password():
 
     def password_entered():
         """পাসওয়ার্ড সাবমিট করার পর চেক করবে"""
-        if hmac.compare_digest(st.session_state["password"], st.secrets["APP_PASSWORD"]):
+        # নিরাপদভাবে সেশন স্টেট থেকে পাসওয়ার্ড নেওয়া হচ্ছে (KeyError এড়াতে)
+        entered_password = st.session_state.get("password", "")
+        
+        if hmac.compare_digest(entered_password, st.secrets["APP_PASSWORD"]):
             st.session_state["password_correct"] = True
             # ৭ দিনের জন্য ব্রাউজারে কুকি সেভ করে রাখা হচ্ছে
             cookie_manager.set(
@@ -47,7 +50,7 @@ def check_password():
                 val=get_password_hash(), 
                 expires_at=datetime.datetime.now() + datetime.timedelta(days=7)
             )
-            del st.session_state["password"]  # পাসওয়ার্ড মুছে ফেলা হচ্ছে
+            # del st.session_state["password"] লাইনটি বাদ দেওয়া হয়েছে Streamlit-এর সাথে কনফ্লিক্ট এড়ানোর জন্য
         else:
             st.session_state["password_correct"] = False
 
