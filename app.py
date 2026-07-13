@@ -6,11 +6,44 @@ import pandas as pd
 import random
 import time
 from contextlib import contextmanager
+import hmac
 
 # -----------------------------------------------------------------------------
 # 0. PAGE CONFIG (must be first Streamlit call)
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="GK Exam Engine", page_icon="📚", layout="wide", initial_sidebar_state="expanded")
+
+# -----------------------------------------------------------------------------
+# 0.5. PASSWORD AUTHENTICATION
+# -----------------------------------------------------------------------------
+def check_password():
+    """Returns `True` if the user had the correct password."""
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        if hmac.compare_digest(st.session_state["password"], st.secrets["APP_PASSWORD"]):
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # don't store password
+        else:
+            st.session_state["password_correct"] = False
+
+    if st.session_state.get("password_correct", False):
+        return True
+
+    # Show input for password
+    st.markdown('<div class="app-header"><h2>🔒 অ্যাক্সেস সংরক্ষিত (Access Restricted)</h2></div>', unsafe_allow_html=True)
+    st.text_input(
+        "অ্যাপটিতে প্রবেশ করতে সঠিক পাসওয়ার্ড দিন (Enter Password):", 
+        type="password", 
+        on_change=password_entered, 
+        key="password"
+    )
+    
+    if "password_correct" in st.session_state and not st.session_state["password_correct"]:
+        st.error("😕 পাসওয়ার্ড ভুল হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন। (Incorrect Password)")
+    return False
+
+if not check_password():
+    st.stop()  # Do not continue if check_password is not True.
 
 # -----------------------------------------------------------------------------
 # 1. DATABASE LAYER (Connection Pool + Auto-Reconnect, thread-safe for multi-session)
