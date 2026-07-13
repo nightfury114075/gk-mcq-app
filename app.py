@@ -17,13 +17,9 @@ import extra_streamlit_components as stx
 st.set_page_config(page_title="GK Exam Engine", page_icon="📚", layout="wide", initial_sidebar_state="expanded")
 
 # -----------------------------------------------------------------------------
-# 0.5. PASSWORD AUTHENTICATION (7 Days Memory via Cookies)
+# 0.5. PASSWORD AUTHENTICATION (7 Days Memory via Cookies - Fixed)
 # -----------------------------------------------------------------------------
-@st.cache_resource(experimental_allow_widgets=True)
-def get_cookie_manager():
-    return stx.CookieManager()
-
-cookie_manager = get_cookie_manager()
+cookie_manager = stx.CookieManager()
 
 def get_password_hash():
     """নিরাপত্তার জন্য মূল পাসওয়ার্ডের পরিবর্তে একটি হ্যাশ তৈরি করা হলো"""
