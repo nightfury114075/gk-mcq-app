@@ -5,71 +5,12 @@ from psycopg2 import pool as pg_pool
 import pandas as pd
 import random
 import time
-import datetime
-import hashlib
-import hmac
 from contextlib import contextmanager
-import extra_streamlit_components as stx
 
 # -----------------------------------------------------------------------------
 # 0. PAGE CONFIG (must be first Streamlit call)
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="GK Exam Engine", page_icon="📚", layout="wide", initial_sidebar_state="expanded")
-
-# -----------------------------------------------------------------------------
-# 0.5. PASSWORD AUTHENTICATION (7 Days Memory via Cookies - Fixed KeyError)
-# -----------------------------------------------------------------------------
-cookie_manager = stx.CookieManager()
-
-def get_password_hash():
-    """নিরাপত্তার জন্য মূল পাসওয়ার্ডের পরিবর্তে একটি হ্যাশ তৈরি করা হলো"""
-    return hashlib.sha256(st.secrets["APP_PASSWORD"].encode()).hexdigest()
-
-def check_password():
-    """Returns `True` if the user had the correct password or has a valid 7-day cookie."""
-    
-    # 1. প্রথমে চেক করবে ব্রাউজারে কুকি সেভ করা আছে কিনা
-    auth_cookie = cookie_manager.get(cookie="gk_auth_token")
-    if auth_cookie == get_password_hash():
-        return True
-
-    # 2. সেশন স্টেট চেক (ইনস্ট্যান্ট লগইনের জন্য)
-    if st.session_state.get("password_correct", False):
-        return True
-
-    def password_entered():
-        """পাসওয়ার্ড সাবমিট করার পর চেক করবে"""
-        # নিরাপদভাবে সেশন স্টেট থেকে পাসওয়ার্ড নেওয়া হচ্ছে (KeyError এড়াতে)
-        entered_password = st.session_state.get("password", "")
-        
-        if hmac.compare_digest(entered_password, st.secrets["APP_PASSWORD"]):
-            st.session_state["password_correct"] = True
-            # ৭ দিনের জন্য ব্রাউজারে কুকি সেভ করে রাখা হচ্ছে
-            cookie_manager.set(
-                cookie="gk_auth_token", 
-                val=get_password_hash(), 
-                expires_at=datetime.datetime.now() + datetime.timedelta(days=7)
-            )
-            # del st.session_state["password"] লাইনটি বাদ দেওয়া হয়েছে Streamlit-এর সাথে কনফ্লিক্ট এড়ানোর জন্য
-        else:
-            st.session_state["password_correct"] = False
-
-    # পাসওয়ার্ড ইনপুট UI
-    st.markdown('<div class="app-header"><h2>🔒 অ্যাক্সেস সংরক্ষিত (Access Restricted)</h2></div>', unsafe_allow_html=True)
-    st.text_input(
-        "অ্যাপটিতে প্রবেশ করতে সঠিক পাসওয়ার্ড দিন (একবার দিলে ৭ দিন মনে রাখবে):", 
-        type="password", 
-        on_change=password_entered, 
-        key="password"
-    )
-    
-    if "password_correct" in st.session_state and not st.session_state["password_correct"]:
-        st.error("😕 পাসওয়ার্ড ভুল হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন। (Incorrect Password)")
-    return False
-
-# যদি পাসওয়ার্ড বা কুকি না মেলে, তবে এখানেই অ্যাপ আটকে যাবে
-if not check_password():
-    st.stop()
 
 # -----------------------------------------------------------------------------
 # 1. DATABASE LAYER (Connection Pool + Auto-Reconnect, thread-safe for multi-session)
@@ -140,27 +81,16 @@ def get_categories():
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_all_questions_by_category(category_id):
-    if category_id is None:
-        query = """
-            SELECT q.question_id, q.question_text, q.explanation, q.source_url,
-                   o.option_text, o.is_correct
-            FROM questions q
-            JOIN options o ON q.question_id = o.question_id
-            ORDER BY q.question_id ASC;
-        """
-        with get_raw_conn() as conn:
-            return pd.read_sql_query(query, conn)
-    else:
-        query = """
-            SELECT q.question_id, q.question_text, q.explanation, q.source_url,
-                   o.option_text, o.is_correct
-            FROM questions q
-            JOIN options o ON q.question_id = o.question_id
-            WHERE q.category_id = %s
-            ORDER BY q.question_id ASC;
-        """
-        with get_raw_conn() as conn:
-            return pd.read_sql_query(query, conn, params=(category_id,))
+    query = """
+        SELECT q.question_id, q.question_text, q.explanation, q.source_url,
+               o.option_text, o.is_correct
+        FROM questions q
+        JOIN options o ON q.question_id = o.question_id
+        WHERE q.category_id = %s
+        ORDER BY q.question_id ASC;
+    """
+    with get_raw_conn() as conn:
+        return pd.read_sql_query(query, conn, params=(category_id,))
 
 def group_questions(df):
     grouped = []
@@ -184,6 +114,7 @@ def get_randomized_question_ids(category_id=None, limit=None):
     return ids[:limit] if limit else ids
 
 def fetch_question_bank(question_ids):
+    """One round-trip fetch of every question + option needed for the whole test queue."""
     if not question_ids:
         return {}
     with get_cursor() as cur:
@@ -275,36 +206,76 @@ def reset_test_state():
     st.session_state.current_q_id = None
 
 # -----------------------------------------------------------------------------
-# 4. GLOBAL STYLING
+# 4. GLOBAL STYLING (fonts, gradients, cards, hover states, animations)
 # -----------------------------------------------------------------------------
 def inject_css():
     st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&display=swap');
+
     html, body, [class*="css"] { font-family: 'Hind Siliguri', 'Segoe UI', sans-serif !important; }
+
     @keyframes fadeIn { from {opacity:0;} to {opacity:1;} }
     @keyframes slideIn { from {opacity:0; transform: translateY(14px);} to {opacity:1; transform: translateY(0);} }
     @keyframes popIn { from {opacity:0; transform: scale(.92);} to {opacity:1; transform: scale(1);} }
-    .app-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 26px 32px; border-radius: 18px; color: #fff; margin-bottom: 22px; box-shadow: 0 10px 28px rgba(102,126,234,0.28); animation: fadeIn .5s ease; }
+
+    .app-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 26px 32px; border-radius: 18px; color: #fff; margin-bottom: 22px;
+        box-shadow: 0 10px 28px rgba(102,126,234,0.28); animation: fadeIn .5s ease;
+    }
     .app-header h2 { margin: 0; color: #fff; }
-    .question-card { background: #ffffff; border-radius: 18px; padding: 26px 28px; box-shadow: 0 6px 22px rgba(0,0,0,0.08); border-left: 6px solid #764ba2; animation: slideIn .35s ease-out; margin-bottom: 18px; }
+
+    .question-card {
+        background: #ffffff; border-radius: 18px; padding: 26px 28px;
+        box-shadow: 0 6px 22px rgba(0,0,0,0.08); border-left: 6px solid #764ba2;
+        animation: slideIn .35s ease-out; margin-bottom: 18px;
+    }
     .big-question { font-size: 24px; font-weight: 700; line-height: 1.55; color: #1a1a2e; }
     .study-q { font-size: 19px; font-weight: 600; color: #1a1a2e; margin-bottom: 10px; }
-    .opt-correct { background: #e6f9ee; color: #0a7a3c; border: 1.5px solid #34c77b; border-radius: 10px; padding: 8px 14px; margin-bottom: 8px; font-weight: 600; animation: popIn .3s ease; }
-    .opt-normal { background: #f7f8fb; color: #33374d; border: 1.5px solid #e5e7f0; border-radius: 10px; padding: 8px 14px; margin-bottom: 8px; }
-    div[role="radiogroup"] label { background: #f8f9fc; border: 1.8px solid #e5e7f0; border-radius: 12px; padding: 10px 16px; margin-bottom: 8px; transition: all 0.2s ease; }
+
+    .opt-correct {
+        background: #e6f9ee; color: #0a7a3c; border: 1.5px solid #34c77b; border-radius: 10px;
+        padding: 8px 14px; margin-bottom: 8px; font-weight: 600; animation: popIn .3s ease;
+    }
+    .opt-normal {
+        background: #f7f8fb; color: #33374d; border: 1.5px solid #e5e7f0; border-radius: 10px;
+        padding: 8px 14px; margin-bottom: 8px;
+    }
+
+    div[role="radiogroup"] label {
+        background: #f8f9fc; border: 1.8px solid #e5e7f0; border-radius: 12px;
+        padding: 10px 16px; margin-bottom: 8px; transition: all 0.2s ease;
+    }
     div[role="radiogroup"] label:hover { border-color: #764ba2; background: #f2effc; transform: translateX(3px); }
+
     .stButton>button { border-radius: 10px; font-weight: 600; transition: all .2s ease; border: none; }
     .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 8px 18px rgba(102,126,234,0.3); }
+
     [data-testid="stMetric"] { background: #f8f9fc; border-radius: 14px; padding: 12px 16px; border: 1px solid #eceefa; }
-    .source-link-icon { text-decoration: none !important; margin-left: 8px; font-size: 15px; }
+
+    .source-link-icon { text-decoration: none; margin-left: 8px; font-size: 15px; }
     </style>
     """, unsafe_allow_html=True)
 
 inject_css()
 
 # -----------------------------------------------------------------------------
-# 5. TIMER 
+# 5. TIMER — real digital countdown clock, pinned top-right, stays put on scroll.
+#
+#    Why the previous version broke scrolling: it made the *iframe itself*
+#    position:fixed and then reached up through several of Streamlit's own
+#    wrapper elements forcing height:0 / overflow:visible on them. Those
+#    wrapper elements are shared by Streamlit's own scroll container, so that
+#    hack occasionally collapsed the whole page's ability to scroll.
+#
+#    Fix: never touch Streamlit's own DOM. Instead, the script (running inside
+#    a tiny invisible iframe) reaches into the *parent* page and creates ONE
+#    independent <div> appended directly to <body>, completely outside
+#    Streamlit's layout tree. That div is what gets position:fixed + the
+#    countdown text, and pointer-events:none so it can never block clicks or
+#    scrolling on the page underneath it. This function is called on every
+#    rerun and simply shows/updates/removes that div based on session state.
 # -----------------------------------------------------------------------------
 def render_timer():
     show = bool(st.session_state.test_active and st.session_state.end_timestamp)
@@ -316,42 +287,75 @@ def render_timer():
         var doc = window.parent.document;
         var BADGE_ID = 'gk-live-timer-badge';
         var show = {str(show).lower()};
+
         if (!show) {{
           var existing = doc.getElementById(BADGE_ID);
           if (existing) existing.remove();
-          if (window.parent.__gkTimerInterval) {{ clearInterval(window.parent.__gkTimerInterval); window.parent.__gkTimerInterval = null; }}
+          if (window.parent.__gkTimerInterval) {{
+            clearInterval(window.parent.__gkTimerInterval);
+            window.parent.__gkTimerInterval = null;
+          }}
           return;
         }}
+
         if (!doc.getElementById('gk-timer-style')) {{
           var styleTag = doc.createElement('style');
           styleTag.id = 'gk-timer-style';
           styleTag.innerHTML = '@keyframes gkPulseWarn {{0%{{transform:scale(1);}}50%{{transform:scale(1.05);}}100%{{transform:scale(1);}}}}';
           doc.head.appendChild(styleTag);
         }}
+
         var badge = doc.getElementById(BADGE_ID);
         if (!badge) {{
           badge = doc.createElement('div');
           badge.id = BADGE_ID;
-          badge.style.position = 'fixed'; badge.style.top = '58px'; badge.style.right = '20px';
-          badge.style.zIndex = '999999'; badge.style.fontFamily = "'Hind Siliguri','Segoe UI',sans-serif";
-          badge.style.fontSize = '26px'; badge.style.fontWeight = '800'; badge.style.letterSpacing = '2px';
-          badge.style.color = '#33374d'; badge.style.background = '#ffffff';
-          badge.style.padding = '10px 26px'; badge.style.borderRadius = '14px';
-          badge.style.border = '2px solid #e5e7f0'; badge.style.boxShadow = '0 6px 18px rgba(0,0,0,0.18)';
+          badge.style.position = 'fixed';
+          badge.style.top = '58px';
+          badge.style.right = '20px';
+          badge.style.zIndex = '999999';
+          badge.style.fontFamily = "'Hind Siliguri','Segoe UI',sans-serif";
+          badge.style.fontSize = '26px';
+          badge.style.fontWeight = '800';
+          badge.style.letterSpacing = '2px';
+          badge.style.color = '#33374d';
+          badge.style.background = '#ffffff';
+          badge.style.padding = '10px 26px';
+          badge.style.borderRadius = '14px';
+          badge.style.border = '2px solid #e5e7f0';
+          badge.style.boxShadow = '0 6px 18px rgba(0,0,0,0.18)';
           badge.style.transition = 'background .3s ease, color .3s ease, border-color .3s ease';
-          badge.style.textAlign = 'center'; badge.style.pointerEvents = 'none';
+          badge.style.textAlign = 'center';
+          badge.style.pointerEvents = 'none';
           doc.body.appendChild(badge);
         }}
+
         var endTime = {end_ms};
-        if (window.parent.__gkTimerEndTime !== endTime) {{ window.parent.__gkTimerEndTime = endTime; window.parent.__gkTimerWarned = false; }}
-        if (window.parent.__gkTimerInterval) clearInterval(window.parent.__gkTimerInterval);
+        if (window.parent.__gkTimerEndTime !== endTime) {{
+          window.parent.__gkTimerEndTime = endTime;
+          window.parent.__gkTimerWarned = false;
+        }}
+        if (window.parent.__gkTimerInterval) {{
+          clearInterval(window.parent.__gkTimerInterval);
+        }}
+
         function playWarningSound() {{
           try {{
             var ctx = new (window.AudioContext || window.webkitAudioContext)();
-            function beep(delay) {{ setTimeout(function() {{ var osc = ctx.createOscillator(); var gain = ctx.createGain(); osc.connect(gain); gain.connect(ctx.destination); osc.type = 'sine'; osc.frequency.value = 600; gain.gain.setValueAtTime(0.1, ctx.currentTime); osc.start(); setTimeout(function() {{ osc.stop(); }}, 300); }}, delay); }}
+            function beep(delay) {{
+              setTimeout(function() {{
+                var osc = ctx.createOscillator();
+                var gain = ctx.createGain();
+                osc.connect(gain); gain.connect(ctx.destination);
+                osc.type = 'sine'; osc.frequency.value = 600;
+                gain.gain.setValueAtTime(0.1, ctx.currentTime);
+                osc.start();
+                setTimeout(function() {{ osc.stop(); }}, 300);
+              }}, delay);
+            }}
             beep(0); beep(600); beep(1200);
           }} catch (e) {{}}
         }}
+
         function tick() {{
           var b = doc.getElementById(BADGE_ID);
           if (!b) return;
@@ -359,16 +363,29 @@ def render_timer():
           var distance = window.parent.__gkTimerEndTime - now;
           if (distance <= 0) {{
             clearInterval(window.parent.__gkTimerInterval);
-            b.innerHTML = '⏰ সময় শেষ!'; b.style.color = '#fff'; b.style.background = '#D9534F'; b.style.borderColor = '#D9534F'; b.style.animation = 'none'; return;
+            b.innerHTML = '⏰ সময় শেষ!';
+            b.style.color = '#fff';
+            b.style.background = '#D9534F';
+            b.style.borderColor = '#D9534F';
+            b.style.animation = 'none';
+            return;
           }}
           var minutes = Math.floor((distance % (1000*60*60)) / (1000*60));
           var seconds = Math.floor((distance % (1000*60)) / 1000);
-          b.innerHTML = '⏳ ' + String(minutes).padStart(2, '0') + ' : ' + String(seconds).padStart(2, '0');
+          var mm = String(minutes).padStart(2, '0');
+          var ss = String(seconds).padStart(2, '0');
+          b.innerHTML = '⏳ ' + mm + ' : ' + ss;
           if (distance <= 300000 && !window.parent.__gkTimerWarned) {{
-            window.parent.__gkTimerWarned = true; b.style.background = '#fff4e0'; b.style.color = '#d32f2f'; b.style.borderColor = '#d32f2f'; b.style.animation = 'gkPulseWarn 1.4s infinite'; playWarningSound();
+            window.parent.__gkTimerWarned = true;
+            b.style.background = '#fff4e0';
+            b.style.color = '#d32f2f';
+            b.style.borderColor = '#d32f2f';
+            b.style.animation = 'gkPulseWarn 1.4s infinite';
+            playWarningSound();
           }}
         }}
-        tick(); window.parent.__gkTimerInterval = setInterval(tick, 1000);
+        tick();
+        window.parent.__gkTimerInterval = setInterval(tick, 1000);
       }} catch (e) {{}}
     }})();
     </script>
@@ -381,7 +398,11 @@ def render_timer():
 with st.sidebar:
     st.markdown("## 📚 GK Exam Engine")
     st.caption("BCS প্রস্তুতির জন্য স্মার্ট লার্নিং পোর্টাল")
-    app_mode = st.radio("মোড নির্বাচন করুন:", ["পড়াশোনা (Study Mode)", "লাইভ পরীক্ষা (Live MCQ)", "প্রগতি ও হিস্ট্রি (Progress)"], label_visibility="collapsed")
+    app_mode = st.radio(
+        "মোড নির্বাচন করুন:",
+        ["পড়াশোনা (Study Mode)", "লাইভ পরীক্ষা (Live MCQ)", "প্রগতি ও হিস্ট্রি (Progress)"],
+        label_visibility="collapsed",
+    )
     st.markdown("---")
     if st.button("🔄 ডেটা রিফ্রেশ করুন", use_container_width=True):
         get_categories.clear()
@@ -390,17 +411,18 @@ with st.sidebar:
         st.rerun()
 
 categories = get_categories()
-category_options = {"সবগুলো ক্যাটাগরি (All)": None}
-for cid, name in categories:
-    category_options[name] = cid
+category_options = {name: cid for cid, name in categories}
 
+# Sync the floating countdown badge every rerun (shows/updates/removes itself
+# based on session state — see render_timer() for why this is safe for scrolling).
 render_timer()
 
 # -----------------------------------------------------------------------------
-# 7. MODE 1 — STUDY MODE 
+# 7. MODE 1 — STUDY MODE (searchable, paginated for speed on large sets)
 # -----------------------------------------------------------------------------
 if app_mode == "পড়াশোনা (Study Mode)":
     st.markdown('<div class="app-header"><h2>📖 তথ্য ভাণ্ডার ও রিভিশন</h2></div>', unsafe_allow_html=True)
+
     col_a, col_b = st.columns([2, 1])
     with col_a:
         selected_cat_name = st.selectbox("ক্যাটাগরি বেছে নিন:", list(category_options.keys()))
@@ -408,6 +430,7 @@ if app_mode == "পড়াশোনা (Study Mode)":
         search_term = st.text_input("🔍 প্রশ্ন খুঁজুন", placeholder="কীওয়ার্ড লিখুন...")
 
     df = get_all_questions_by_category(category_options[selected_cat_name])
+
     state_key = f"{selected_cat_name}::{search_term}"
     if st.session_state.study_state_key != state_key:
         st.session_state.study_state_key = state_key
@@ -416,6 +439,7 @@ if app_mode == "পড়াশোনা (Study Mode)":
     filtered = df[df["question_text"].str.contains(search_term, case=False, na=False)] if search_term else df
     grouped = group_questions(filtered)
     total_found = len(grouped)
+
     st.caption(f"📊 মোট {total_found} টি প্রশ্ন পাওয়া গেছে")
 
     if not grouped:
@@ -426,11 +450,14 @@ if app_mode == "পড়াশোনা (Study Mode)":
                 st.markdown(f'<div class="study-q">{i + 1}. {item["question_text"]}</div>', unsafe_allow_html=True)
                 cols = st.columns(2)
                 for j, (opt_text, is_correct) in enumerate(item["options"]):
-                    css_class, icon = ("opt-correct", "✅") if is_correct else ("opt-normal", "⚪")
+                    css_class = "opt-correct" if is_correct else "opt-normal"
+                    icon = "✅" if is_correct else "⚪"
                     with cols[j % 2]:
                         st.markdown(f'<div class="{css_class}">{icon} {opt_text}</div>', unsafe_allow_html=True)
                 with st.expander("💡 ব্যাখ্যা দেখুন"):
-                    link_html = f' <a href="{item["source_url"]}" target="_blank" class="source-link-icon" title="সূত্র দেখুন">🔗</a>' if item.get("source_url") else ""
+                    link_html = ""
+                    if item.get("source_url"):
+                        link_html = f' <a href="{item["source_url"]}" target="_blank" class="source-link-icon" title="সূত্র দেখুন">🔗</a>'
                     st.markdown(f'{item["explanation"]}{link_html}', unsafe_allow_html=True)
 
         if st.session_state.study_visible < total_found:
@@ -446,14 +473,22 @@ if app_mode == "পড়াশোনা (Study Mode)":
                     st.rerun()
 
 # -----------------------------------------------------------------------------
-# 8. MODE 2 — LIVE MCQ TEST
+# 8. MODE 2 — LIVE MCQ TEST (batched question bank = zero per-question DB calls)
 # -----------------------------------------------------------------------------
 elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
+
     if not st.session_state.test_active:
         st.markdown('<div class="app-header"><h2>⚙️ পরীক্ষার সেটিংস</h2></div>', unsafe_allow_html=True)
         with st.container(border=True):
-            test_type = st.radio("পরীক্ষার ধরন নির্বাচন করুন:", ["নির্দিষ্ট ক্যাটাগরি", "সম্মিলিত পরীক্ষা (সব মিলিয়ে)"], horizontal=True)
-            chosen_cat_id = category_options[st.selectbox("ক্যাটাগরি বেছে নিন:", list(category_options.keys()))] if test_type == "নির্দিষ্ট ক্যাটাগরি" else None
+            test_type = st.radio(
+                "পরীক্ষার ধরন নির্বাচন করুন:",
+                ["নির্দিষ্ট ক্যাটাগরি", "সম্মিলিত পরীক্ষা (সব মিলিয়ে)"],
+                horizontal=True,
+            )
+
+            chosen_cat_id = None
+            if test_type == "নির্দিষ্ট ক্যাটাগরি":
+                chosen_cat_id = category_options[st.selectbox("ক্যাটাগরি বেছে নিন:", list(category_options.keys()))]
 
             col_q, col_t = st.columns(2)
             with col_q:
@@ -477,17 +512,22 @@ elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
                         st.session_state.end_timestamp = time.time() + (t_limit * 60) if t_limit > 0 else None
                         load_current_mcq()
                         st.rerun()
+
     else:
         total_q = len(st.session_state.question_queue)
         progress_frac = (st.session_state.current_q_index / total_q) if total_q else 0.0
+
         st.markdown('<div class="app-header"><h2>✍️ লাইভ সেলফ-অ্যাসেসমেন্ট</h2></div>', unsafe_allow_html=True)
         st.progress(progress_frac, text=f"অগ্রগতি: {st.session_state.current_q_index}/{total_q}")
 
         col1, col2, col3 = st.columns(3)
         col1.metric("বর্তমান প্রশ্ন", f"{min(st.session_state.current_q_index + 1, total_q)}/{total_q}")
         col2.metric("সঠিক উত্তর", st.session_state.correct_count)
-        current_percentage = (st.session_state.correct_count / st.session_state.total_attempted * 100) if st.session_state.total_attempted > 0 else 0
+        current_percentage = (
+            st.session_state.correct_count / st.session_state.total_attempted * 100
+        ) if st.session_state.total_attempted > 0 else 0
         col3.metric("বর্তমান স্কোর", f"{current_percentage:.1f}%")
+
         st.markdown("---")
 
         with st.sidebar:
@@ -505,30 +545,43 @@ elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
                 save_test_score(st.session_state.test_type_label, st.session_state.total_attempted, st.session_state.correct_count, current_percentage)
                 reset_test_state()
                 st.rerun()
+
         else:
             col_main, col_review = st.columns([1.5, 1], gap="large")
+
             with col_main:
                 st.markdown(
-                    f'<div class="question-card"><div class="big-question">প্রশ্ন {st.session_state.current_q_index + 1}: {st.session_state.current_q_text}</div></div>',
+                    f'<div class="question-card"><div class="big-question">'
+                    f'প্রশ্ন {st.session_state.current_q_index + 1}: {st.session_state.current_q_text}'
+                    f'</div></div>',
                     unsafe_allow_html=True,
                 )
                 option_labels = [opt[0] for opt in st.session_state.current_options]
                 radio_key = f"radio_{st.session_state.current_q_id}_{st.session_state.current_q_index}"
-                user_choice = st.radio("আপনার উত্তর বেছে নিন:", option_labels, index=None, key=radio_key, label_visibility="collapsed")
+                user_choice = st.radio(
+                    "আপনার উত্তর বেছে নিন:", option_labels, index=None, key=radio_key, label_visibility="collapsed"
+                )
 
                 if user_choice:
                     correct_answer = next(opt[0] for opt in st.session_state.current_options if opt[1] is True)
                     is_correct = user_choice == correct_answer
+
                     st.session_state.session_history.insert(0, {
-                        "question": st.session_state.current_q_text, "user_choice": user_choice, "correct_answer": correct_answer,
-                        "explanation": st.session_state.current_q_explain, "source_url": st.session_state.current_q_source_url, "is_correct": is_correct,
+                        "question": st.session_state.current_q_text,
+                        "user_choice": user_choice,
+                        "correct_answer": correct_answer,
+                        "explanation": st.session_state.current_q_explain,
+                        "source_url": st.session_state.current_q_source_url,
+                        "is_correct": is_correct,
                     })
+
                     st.session_state.total_attempted += 1
                     if is_correct:
                         st.session_state.correct_count += 1
                         st.toast("✅ সঠিক উত্তর!", icon="✅")
                     else:
                         st.toast(f"❌ ভুল! সঠিক উত্তর: {correct_answer}", icon="❌")
+
                     st.session_state.current_q_index += 1
                     load_current_mcq()
                     st.rerun()
@@ -542,9 +595,14 @@ elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
                         for idx, record in enumerate(st.session_state.session_history):
                             icon = "🟢" if record["is_correct"] else "🔴"
                             with st.expander(f"{icon} {record['question'][:60]}", expanded=(idx == 0)):
-                                if record["is_correct"]: st.success(f"আপনার উত্তর: {record['user_choice']} ✓")
-                                else: st.error(f"আপনার উত্তর: {record['user_choice']} ✗"); st.info(f"সঠিক উত্তর: **{record['correct_answer']}**")
-                                link_html = f' <a href="{record["source_url"]}" target="_blank" class="source-link-icon" title="সূত্র দেখুন">🔗</a>' if record.get("source_url") else ""
+                                if record["is_correct"]:
+                                    st.success(f"আপনার উত্তর: {record['user_choice']} ✓")
+                                else:
+                                    st.error(f"আপনার উত্তর: {record['user_choice']} ✗")
+                                    st.info(f"সঠিক উত্তর: **{record['correct_answer']}**")
+                                link_html = ""
+                                if record.get("source_url"):
+                                    link_html = f' <a href="{record["source_url"]}" target="_blank" class="source-link-icon" title="সূত্র দেখুন">🔗</a>'
                                 st.markdown(f'<span>💡 {record["explanation"]}{link_html}</span>', unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
@@ -552,12 +610,14 @@ elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
 # -----------------------------------------------------------------------------
 elif app_mode == "প্রগতি ও হিস্ট্রি (Progress)":
     st.markdown('<div class="app-header"><h2>📈 আপনার উন্নতির গ্রাফ</h2></div>', unsafe_allow_html=True)
+
     history_df = get_history()
 
     if history_df.empty:
         st.info("এখনো কোনো পরীক্ষার রেকর্ড নেই। লাইভ পরীক্ষা দিয়ে স্কোর সেভ করুন!")
     else:
         history_df["Date"] = pd.to_datetime(history_df["test_date"]).dt.strftime("%b %d, %Y %I:%M %p")
+
         c1, c2, c3 = st.columns(3)
         c1.metric("মোট পরীক্ষা", len(history_df))
         c2.metric("গড় স্কোর", f"{history_df['score_percentage'].mean():.1f}%")
