@@ -81,16 +81,27 @@ def get_categories():
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_all_questions_by_category(category_id):
-    query = """
-        SELECT q.question_id, q.question_text, q.explanation,
-               o.option_text, o.is_correct
-        FROM questions q
-        JOIN options o ON q.question_id = o.question_id
-        WHERE q.category_id = %s
-        ORDER BY q.question_id ASC;
-    """
-    with get_raw_conn() as conn:
-        return pd.read_sql_query(query, conn, params=(category_id,))
+    if category_id is None:
+        query = """
+            SELECT q.question_id, q.question_text, q.explanation, q.source_url,
+                   o.option_text, o.is_correct
+            FROM questions q
+            JOIN options o ON q.question_id = o.question_id
+            ORDER BY q.question_id ASC;
+        """
+        with get_raw_conn() as conn:
+            return pd.read_sql_query(query, conn)
+    else:
+        query = """
+            SELECT q.question_id, q.question_text, q.explanation, q.source_url,
+                   o.option_text, o.is_correct
+            FROM questions q
+            JOIN options o ON q.question_id = o.question_id
+            WHERE q.category_id = %s
+            ORDER BY q.question_id ASC;
+        """
+        with get_raw_conn() as conn:
+            return pd.read_sql_query(query, conn, params=(category_id,))
 
 def group_questions(df):
     grouped = []
@@ -99,6 +110,7 @@ def group_questions(df):
             "question_id": qid,
             "question_text": g["question_text"].iloc[0],
             "explanation": g["explanation"].iloc[0],
+            "source_url": g["source_url"].iloc[0] if "source_url" in g.columns else None,
             "options": list(zip(g["option_text"], g["is_correct"])),
         })
     return grouped
@@ -118,7 +130,7 @@ def fetch_question_bank(question_ids):
         return {}
     with get_cursor() as cur:
         cur.execute(
-            "SELECT question_id, question_text, explanation FROM questions WHERE question_id = ANY(%s);",
+            "SELECT question_id, question_text, explanation, source_url FROM questions WHERE question_id = ANY(%s);",
             (question_ids,),
         )
         q_rows = cur.fetchall()
@@ -128,7 +140,7 @@ def fetch_question_bank(question_ids):
         )
         o_rows = cur.fetchall()
 
-    bank = {qid: {"text": text, "explain": explain, "options": []} for qid, text, explain in q_rows}
+    bank = {qid: {"text": text, "explain": explain, "source_url": source_url, "options": []} for qid, text, explain, source_url in q_rows}
     for qid, opt_text, is_correct in o_rows:
         if qid in bank:
             bank[qid]["options"].append((opt_text, is_correct))
@@ -165,6 +177,7 @@ def init_state():
         "current_q_id": None,
         "current_q_text": None,
         "current_q_explain": None,
+        "current_q_source_url": None,
         "current_options": None,
         "total_attempted": 0,
         "correct_count": 0,
@@ -187,6 +200,7 @@ def load_current_mcq():
             st.session_state.current_q_id = qid
             st.session_state.current_q_text = data["text"]
             st.session_state.current_q_explain = data["explain"]
+            st.session_state.current_q_source_url = data.get("source_url")
             st.session_state.current_options = data["options"]
             return
     st.session_state.current_q_id = None
@@ -250,6 +264,8 @@ def inject_css():
     .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 8px 18px rgba(102,126,234,0.3); }
 
     [data-testid="stMetric"] { background: #f8f9fc; border-radius: 14px; padding: 12px 16px; border: 1px solid #eceefa; }
+
+    .source-link-icon { text-decoration: none !important; margin-left: 8px; font-size: 15px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -257,20 +273,6 @@ inject_css()
 
 # -----------------------------------------------------------------------------
 # 5. TIMER — real digital countdown clock, pinned top-right, stays put on scroll.
-#
-#    Why the previous version broke scrolling: it made the *iframe itself*
-#    position:fixed and then reached up through several of Streamlit's own
-#    wrapper elements forcing height:0 / overflow:visible on them. Those
-#    wrapper elements are shared by Streamlit's own scroll container, so that
-#    hack occasionally collapsed the whole page's ability to scroll.
-#
-#    Fix: never touch Streamlit's own DOM. Instead, the script (running inside
-#    a tiny invisible iframe) reaches into the *parent* page and creates ONE
-#    independent <div> appended directly to <body>, completely outside
-#    Streamlit's layout tree. That div is what gets position:fixed + the
-#    countdown text, and pointer-events:none so it can never block clicks or
-#    scrolling on the page underneath it. This function is called on every
-#    rerun and simply shows/updates/removes that div based on session state.
 # -----------------------------------------------------------------------------
 def render_timer():
     show = bool(st.session_state.test_active and st.session_state.end_timestamp)
@@ -406,10 +408,11 @@ with st.sidebar:
         st.rerun()
 
 categories = get_categories()
-category_options = {name: cid for cid, name in categories}
+category_options = {"সবগুলো ক্যাটাগরি (All)": None}
+for cid, name in categories:
+    category_options[name] = cid
 
-# Sync the floating countdown badge every rerun (shows/updates/removes itself
-# based on session state — see render_timer() for why this is safe for scrolling).
+# Sync the floating countdown badge every rerun
 render_timer()
 
 # -----------------------------------------------------------------------------
@@ -450,7 +453,10 @@ if app_mode == "পড়াশোনা (Study Mode)":
                     with cols[j % 2]:
                         st.markdown(f'<div class="{css_class}">{icon} {opt_text}</div>', unsafe_allow_html=True)
                 with st.expander("💡 ব্যাখ্যা দেখুন"):
-                    st.write(item["explanation"])
+                    link_html = ""
+                    if item.get("source_url"):
+                        link_html = f' <a href="{item["source_url"]}" target="_blank" class="source-link-icon" title="সূত্র দেখুন">🔗</a>'
+                    st.markdown(f'{item["explanation"]}{link_html}', unsafe_allow_html=True)
 
         if st.session_state.study_visible < total_found:
             remaining = total_found - st.session_state.study_visible
@@ -563,6 +569,7 @@ elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
                         "user_choice": user_choice,
                         "correct_answer": correct_answer,
                         "explanation": st.session_state.current_q_explain,
+                        "source_url": st.session_state.current_q_source_url,
                         "is_correct": is_correct,
                     })
 
@@ -591,7 +598,10 @@ elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
                                 else:
                                     st.error(f"আপনার উত্তর: {record['user_choice']} ✗")
                                     st.info(f"সঠিক উত্তর: **{record['correct_answer']}**")
-                                st.caption(f"💡 {record['explanation']}")
+                                link_html = ""
+                                if record.get("source_url"):
+                                    link_html = f' <a href="{record["source_url"]}" target="_blank" class="source-link-icon" title="সূত্র দেখুন">🔗</a>'
+                                st.markdown(f'<span>💡 {record["explanation"]}{link_html}</span>', unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
 # 9. MODE 3 — PROGRESS HISTORY
