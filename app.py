@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import psycopg2
 from psycopg2 import pool as pg_pool
 import pandas as pd
@@ -13,7 +12,7 @@ from contextlib import contextmanager
 st.set_page_config(page_title="GK Exam Engine", page_icon="📚", layout="wide", initial_sidebar_state="expanded")
 
 # -----------------------------------------------------------------------------
-# 1. DATABASE LAYER (Connection Pool + Auto-Reconnect, thread-safe for multi-session)
+# 1. DATABASE LAYER (Connection Pool + Auto-Reconnect)
 # -----------------------------------------------------------------------------
 @st.cache_resource
 def get_pool():
@@ -34,7 +33,6 @@ def get_pool():
 db_pool = get_pool()
 
 def _ensure_alive(conn):
-    """Ping a pooled connection; transparently swap in a fresh one if it's dead."""
     try:
         with conn.cursor() as c:
             c.execute("SELECT 1")
@@ -61,17 +59,8 @@ def get_cursor(commit=False):
     finally:
         db_pool.putconn(conn)
 
-@contextmanager
-def get_raw_conn():
-    conn = db_pool.getconn()
-    conn = _ensure_alive(conn)
-    try:
-        yield conn
-    finally:
-        db_pool.putconn(conn)
-
 # -----------------------------------------------------------------------------
-# 2. DATA ACCESS (cached + batched to minimize round-trips)
+# 2. DATA ACCESS (Cached & decoupled from raw pandas DB connection)
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=600, show_spinner=False)
 def get_categories():
@@ -81,27 +70,26 @@ def get_categories():
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_all_questions_by_category(category_id):
-    if category_id is None:
-        query = """
-            SELECT q.question_id, q.question_text, q.explanation, q.source_url,
-                   o.option_text, o.is_correct
-            FROM questions q
-            JOIN options o ON q.question_id = o.question_id
-            ORDER BY q.question_id ASC;
-        """
-        with get_raw_conn() as conn:
-            return pd.read_sql_query(query, conn)
-    else:
-        query = """
-            SELECT q.question_id, q.question_text, q.explanation, q.source_url,
-                   o.option_text, o.is_correct
-            FROM questions q
-            JOIN options o ON q.question_id = o.question_id
-            WHERE q.category_id = %s
-            ORDER BY q.question_id ASC;
-        """
-        with get_raw_conn() as conn:
-            return pd.read_sql_query(query, conn, params=(category_id,))
+    query = """
+        SELECT q.question_id, q.question_text, q.explanation, q.source_url,
+               o.option_text, o.is_correct
+        FROM questions q
+        JOIN options o ON q.question_id = o.question_id
+    """
+    params = None
+    if category_id is not None:
+        query += " WHERE q.category_id = %s"
+        params = (category_id,)
+    query += " ORDER BY q.question_id ASC;"
+
+    with get_cursor() as cur:
+        if params:
+            cur.execute(query, params)
+        else:
+            cur.execute(query)
+        # Fixes SQLAlchemy UserWarning by converting directly from cursor results
+        cols = [desc[0] for desc in cur.description]
+        return pd.DataFrame(cur.fetchall(), columns=cols)
 
 def group_questions(df):
     grouped = []
@@ -125,7 +113,6 @@ def get_randomized_question_ids(category_id=None, limit=None):
     return ids[:limit] if limit else ids
 
 def fetch_question_bank(question_ids):
-    """One round-trip fetch of every question + option needed for the whole test queue."""
     if not question_ids:
         return {}
     with get_cursor() as cur:
@@ -160,8 +147,10 @@ def save_test_score(test_type, attempted, correct, percentage):
 @st.cache_data(ttl=30, show_spinner=False)
 def get_history():
     query = "SELECT test_date, test_type, total_attempted, correct_answers, score_percentage FROM exam_history ORDER BY test_date ASC;"
-    with get_raw_conn() as conn:
-        return pd.read_sql_query(query, conn)
+    with get_cursor() as cur:
+        cur.execute(query)
+        cols = [desc[0] for desc in cur.description]
+        return pd.DataFrame(cur.fetchall(), columns=cols)
 
 # -----------------------------------------------------------------------------
 # 3. APPLICATION STATE
@@ -217,7 +206,7 @@ def reset_test_state():
     st.session_state.current_q_id = None
 
 # -----------------------------------------------------------------------------
-# 4. GLOBAL STYLING (fonts, gradients, cards, hover states, animations)
+# 4. GLOBAL STYLING (Responsive, respects Dark/Light mode)
 # -----------------------------------------------------------------------------
 def inject_css():
     st.markdown("""
@@ -231,39 +220,39 @@ def inject_css():
     @keyframes popIn { from {opacity:0; transform: scale(.92);} to {opacity:1; transform: scale(1);} }
 
     .app-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 26px 32px; border-radius: 18px; color: #fff; margin-bottom: 22px;
-        box-shadow: 0 10px 28px rgba(102,126,234,0.28); animation: fadeIn .5s ease;
+        background: linear-gradient(135deg, var(--primary-color) 0%, #764ba2 100%);
+        padding: 26px 32px; border-radius: 18px; color: #ffffff; margin-bottom: 22px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.15); animation: fadeIn .5s ease;
     }
-    .app-header h2 { margin: 0; color: #fff; }
+    .app-header h2 { margin: 0; color: #ffffff; }
 
     .question-card {
-        background: #ffffff; border-radius: 18px; padding: 26px 28px;
-        box-shadow: 0 6px 22px rgba(0,0,0,0.08); border-left: 6px solid #764ba2;
+        background: var(--secondary-background-color); border-radius: 18px; padding: 26px 28px;
+        box-shadow: 0 6px 22px rgba(0,0,0,0.08); border-left: 6px solid var(--primary-color);
         animation: slideIn .35s ease-out; margin-bottom: 18px;
     }
-    .big-question { font-size: 24px; font-weight: 700; line-height: 1.55; color: #1a1a2e; }
-    .study-q { font-size: 19px; font-weight: 600; color: #1a1a2e; margin-bottom: 10px; }
+    .big-question { font-size: 24px; font-weight: 700; line-height: 1.55; color: var(--text-color); }
+    .study-q { font-size: 19px; font-weight: 600; color: var(--text-color); margin-bottom: 10px; }
 
     .opt-correct {
-        background: #e6f9ee; color: #0a7a3c; border: 1.5px solid #34c77b; border-radius: 10px;
+        background: rgba(46, 204, 113, 0.1); color: #2ecc71; border: 1.5px solid #2ecc71; border-radius: 10px;
         padding: 8px 14px; margin-bottom: 8px; font-weight: 600; animation: popIn .3s ease;
     }
     .opt-normal {
-        background: #f7f8fb; color: #33374d; border: 1.5px solid #e5e7f0; border-radius: 10px;
+        background: var(--background-color); color: var(--text-color); border: 1.5px solid var(--secondary-background-color); border-radius: 10px;
         padding: 8px 14px; margin-bottom: 8px;
     }
 
     div[role="radiogroup"] label {
-        background: #f8f9fc; border: 1.8px solid #e5e7f0; border-radius: 12px;
+        background: var(--background-color); border: 1.8px solid var(--secondary-background-color); border-radius: 12px;
         padding: 10px 16px; margin-bottom: 8px; transition: all 0.2s ease;
     }
-    div[role="radiogroup"] label:hover { border-color: #764ba2; background: #f2effc; transform: translateX(3px); }
+    div[role="radiogroup"] label:hover { border-color: var(--primary-color); transform: translateX(3px); }
 
     .stButton>button { border-radius: 10px; font-weight: 600; transition: all .2s ease; border: none; }
-    .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 8px 18px rgba(102,126,234,0.3); }
+    .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 8px 18px rgba(0,0,0,0.15); }
 
-    [data-testid="stMetric"] { background: #f8f9fc; border-radius: 14px; padding: 12px 16px; border: 1px solid #eceefa; }
+    [data-testid="stMetric"] { background: var(--secondary-background-color); border-radius: 14px; padding: 12px 16px; border: 1px solid var(--background-color); }
 
     .source-link-icon { text-decoration: none !important; margin-left: 8px; font-size: 15px; }
     </style>
@@ -272,122 +261,33 @@ def inject_css():
 inject_css()
 
 # -----------------------------------------------------------------------------
-# 5. TIMER — real digital countdown clock, pinned top-right, stays put on scroll.
+# 5. TIMER — Native Streamlit Fragment (No DOM leaks, server-side enforced)
 # -----------------------------------------------------------------------------
-def render_timer():
-    show = bool(st.session_state.test_active and st.session_state.end_timestamp)
-    end_ms = int(st.session_state.end_timestamp * 1000) if st.session_state.end_timestamp else 0
-    html_code = f"""
-    <script>
-    (function() {{
-      try {{
-        var doc = window.parent.document;
-        var BADGE_ID = 'gk-live-timer-badge';
-        var show = {str(show).lower()};
-
-        if (!show) {{
-          var existing = doc.getElementById(BADGE_ID);
-          if (existing) existing.remove();
-          if (window.parent.__gkTimerInterval) {{
-            clearInterval(window.parent.__gkTimerInterval);
-            window.parent.__gkTimerInterval = null;
-          }}
-          return;
-        }}
-
-        if (!doc.getElementById('gk-timer-style')) {{
-          var styleTag = doc.createElement('style');
-          styleTag.id = 'gk-timer-style';
-          styleTag.innerHTML = '@keyframes gkPulseWarn {{0%{{transform:scale(1);}}50%{{transform:scale(1.05);}}100%{{transform:scale(1);}}}}';
-          doc.head.appendChild(styleTag);
-        }}
-
-        var badge = doc.getElementById(BADGE_ID);
-        if (!badge) {{
-          badge = doc.createElement('div');
-          badge.id = BADGE_ID;
-          badge.style.position = 'fixed';
-          badge.style.top = '58px';
-          badge.style.right = '20px';
-          badge.style.zIndex = '999999';
-          badge.style.fontFamily = "'Hind Siliguri','Segoe UI',sans-serif";
-          badge.style.fontSize = '26px';
-          badge.style.fontWeight = '800';
-          badge.style.letterSpacing = '2px';
-          badge.style.color = '#33374d';
-          badge.style.background = '#ffffff';
-          badge.style.padding = '10px 26px';
-          badge.style.borderRadius = '14px';
-          badge.style.border = '2px solid #e5e7f0';
-          badge.style.boxShadow = '0 6px 18px rgba(0,0,0,0.18)';
-          badge.style.transition = 'background .3s ease, color .3s ease, border-color .3s ease';
-          badge.style.textAlign = 'center';
-          badge.style.pointerEvents = 'none';
-          doc.body.appendChild(badge);
-        }}
-
-        var endTime = {end_ms};
-        if (window.parent.__gkTimerEndTime !== endTime) {{
-          window.parent.__gkTimerEndTime = endTime;
-          window.parent.__gkTimerWarned = false;
-        }}
-        if (window.parent.__gkTimerInterval) {{
-          clearInterval(window.parent.__gkTimerInterval);
-        }}
-
-        function playWarningSound() {{
-          try {{
-            var ctx = new (window.AudioContext || window.webkitAudioContext)();
-            function beep(delay) {{
-              setTimeout(function() {{
-                var osc = ctx.createOscillator();
-                var gain = ctx.createGain();
-                osc.connect(gain); gain.connect(ctx.destination);
-                osc.type = 'sine'; osc.frequency.value = 600;
-                gain.gain.setValueAtTime(0.1, ctx.currentTime);
-                osc.start();
-                setTimeout(function() {{ osc.stop(); }}, 300);
-              }}, delay);
-            }}
-            beep(0); beep(600); beep(1200);
-          }} catch (e) {{}}
-        }}
-
-        function tick() {{
-          var b = doc.getElementById(BADGE_ID);
-          if (!b) return;
-          var now = new Date().getTime();
-          var distance = window.parent.__gkTimerEndTime - now;
-          if (distance <= 0) {{
-            clearInterval(window.parent.__gkTimerInterval);
-            b.innerHTML = '⏰ সময় শেষ!';
-            b.style.color = '#fff';
-            b.style.background = '#D9534F';
-            b.style.borderColor = '#D9534F';
-            b.style.animation = 'none';
-            return;
-          }}
-          var minutes = Math.floor((distance % (1000*60*60)) / (1000*60));
-          var seconds = Math.floor((distance % (1000*60)) / 1000);
-          var mm = String(minutes).padStart(2, '0');
-          var ss = String(seconds).padStart(2, '0');
-          b.innerHTML = '⏳ ' + mm + ' : ' + ss;
-          if (distance <= 300000 && !window.parent.__gkTimerWarned) {{
-            window.parent.__gkTimerWarned = true;
-            b.style.background = '#fff4e0';
-            b.style.color = '#d32f2f';
-            b.style.borderColor = '#d32f2f';
-            b.style.animation = 'gkPulseWarn 1.4s infinite';
-            playWarningSound();
-          }}
-        }}
-        tick();
-        window.parent.__gkTimerInterval = setInterval(tick, 1000);
-      }} catch (e) {{}}
-    }})();
-    </script>
-    """
-    components.html(html_code, height=0)
+@st.fragment(run_every=1)
+def live_timer():
+    if st.session_state.test_active and st.session_state.end_timestamp:
+        time_left = st.session_state.end_timestamp - time.time()
+        
+        if time_left <= 0:
+            st.error("⏰ সময় শেষ! পরীক্ষা স্বয়ংক্রিয়ভাবে বন্ধ হচ্ছে...")
+            current_percentage = (
+                st.session_state.correct_count / st.session_state.total_attempted * 100
+            ) if st.session_state.total_attempted > 0 else 0
+            
+            save_test_score(
+                st.session_state.test_type_label, 
+                st.session_state.total_attempted, 
+                st.session_state.correct_count, 
+                current_percentage
+            )
+            reset_test_state()
+            st.rerun()  # Forces parent script execution to close the test UI
+        else:
+            mins, secs = divmod(int(time_left), 60)
+            if time_left <= 300: # 5 minutes warning
+                st.warning(f"⏳ সময় বাকি: {mins:02d} : {secs:02d}")
+            else:
+                st.info(f"⏳ সময় বাকি: {mins:02d} : {secs:02d}")
 
 # -----------------------------------------------------------------------------
 # 6. SIDEBAR NAVIGATION
@@ -401,6 +301,12 @@ with st.sidebar:
         label_visibility="collapsed",
     )
     st.markdown("---")
+    
+    # Run the live timer only if test is currently active
+    if st.session_state.test_active and st.session_state.end_timestamp:
+        live_timer()
+        st.markdown("---")
+
     if st.button("🔄 ডেটা রিফ্রেশ করুন", use_container_width=True):
         get_categories.clear()
         get_all_questions_by_category.clear()
@@ -412,11 +318,9 @@ category_options = {"সবগুলো ক্যাটাগরি (All)": None
 for cid, name in categories:
     category_options[name] = cid
 
-# Sync the floating countdown badge every rerun
-render_timer()
 
 # -----------------------------------------------------------------------------
-# 7. MODE 1 — STUDY MODE (searchable, paginated for speed on large sets)
+# 7. MODE 1 — STUDY MODE 
 # -----------------------------------------------------------------------------
 if app_mode == "পড়াশোনা (Study Mode)":
     st.markdown('<div class="app-header"><h2>📖 তথ্য ভাণ্ডার ও রিভিশন</h2></div>', unsafe_allow_html=True)
@@ -471,7 +375,7 @@ if app_mode == "পড়াশোনা (Study Mode)":
                     st.rerun()
 
 # -----------------------------------------------------------------------------
-# 8. MODE 2 — LIVE MCQ TEST (batched question bank = zero per-question DB calls)
+# 8. MODE 2 — LIVE MCQ TEST
 # -----------------------------------------------------------------------------
 elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
 
@@ -490,7 +394,8 @@ elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
 
             col_q, col_t = st.columns(2)
             with col_q:
-                q_limit_opts = {"১০ টি": 10, "৩০ টি": 30, "৫০ টি": 50, "৭০ টি": 70, "১০০ টি": 100, "সবগুলো প্রশ্ন": 9999}
+                # Fixed: Magic number 9999 replaced with None for true "no limit"
+                q_limit_opts = {"১০ টি": 10, "৩০ টি": 30, "৫০ টি": 50, "৭০ টি": 70, "১০০ টি": 100, "সবগুলো প্রশ্ন": None}
                 q_limit = q_limit_opts[st.selectbox("কয়টি প্রশ্নের পরীক্ষা দেবেন?", list(q_limit_opts.keys()))]
             with col_t:
                 time_opts = {"কোনো লিমিট নেই": 0, "৫ মিনিট": 5, "১০ মিনিট": 10, "২০ মিনিট": 20, "৩০ মিনিট": 30, "১ ঘণ্টা": 60}
@@ -564,7 +469,8 @@ elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
                     correct_answer = next(opt[0] for opt in st.session_state.current_options if opt[1] is True)
                     is_correct = user_choice == correct_answer
 
-                    st.session_state.session_history.insert(0, {
+                    # Fixed: O(1) Append instead of O(n) Insert
+                    st.session_state.session_history.append({
                         "question": st.session_state.current_q_text,
                         "user_choice": user_choice,
                         "correct_answer": correct_answer,
@@ -590,7 +496,8 @@ elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
                     st.info("আপনি উত্তর দেয়া শুরু করলে এখানে এনালাইসিস দেখা যাবে।")
                 else:
                     with st.container(height=500):
-                        for idx, record in enumerate(st.session_state.session_history):
+                        # Reverse iteration over list to show newest on top (O(1) list approach)
+                        for idx, record in enumerate(reversed(st.session_state.session_history)):
                             icon = "🟢" if record["is_correct"] else "🔴"
                             with st.expander(f"{icon} {record['question'][:60]}", expanded=(idx == 0)):
                                 if record["is_correct"]:
