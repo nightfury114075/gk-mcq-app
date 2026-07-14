@@ -310,75 +310,23 @@ def inject_css():
 inject_css()
 
 # -----------------------------------------------------------------------------
-# 5. TIMER — self-contained countdown rendered with st.iframe (replaces the
-#    deprecated components.v1.html + window.parent DOM-injection approach).
-#    Runs entirely inside its own small iframe: no cross-frame document
-#    access, no leaked global intervals, no theme mismatch. On timeout it
-#    posts a message back to the parent window so the app can auto-submit.
+# 5. TIMER — Native Streamlit Fragment
 # -----------------------------------------------------------------------------
-def render_timer_iframe(end_timestamp):
-    end_ms = int(end_timestamp * 1000)
-    html_code = f"""
-    <div id="wrap" style="display:flex; justify-content:flex-end; font-family:'Hind Siliguri','Segoe UI',sans-serif;">
-      <div id="badge" style="
-          font-size: 22px; font-weight: 800; letter-spacing: 1.5px;
-          color: #33374d; background: #ffffff; padding: 8px 22px;
-          border-radius: 12px; border: 2px solid #e5e7f0;
-          box-shadow: 0 4px 14px rgba(0,0,0,0.15); text-align:center;">
-        ⏳ --:--
-      </div>
-    </div>
-    <script>
-      var endTime = {end_ms};
-      var badge = document.getElementById('badge');
-      var warned = false;
-
-      function tick() {{
-        var now = new Date().getTime();
-        var distance = endTime - now;
-        if (distance <= 0) {{
-          badge.innerHTML = '⏰ সময় শেষ!';
-          badge.style.color = '#fff';
-          badge.style.background = '#D9534F';
-          badge.style.borderColor = '#D9534F';
-          clearInterval(timerHandle);
-          // Tell the parent Streamlit app the timer expired so it can auto-submit.
-          try {{
-            window.parent.postMessage({{ gkTimerExpired: true }}, "*");
-          }} catch (e) {{}}
-          return;
-        }}
-        var minutes = Math.floor((distance % (1000*60*60)) / (1000*60));
-        var seconds = Math.floor((distance % (1000*60)) / 1000);
-        var mm = String(minutes).padStart(2, '0');
-        var ss = String(seconds).padStart(2, '0');
-        badge.innerHTML = '⏳ ' + mm + ' : ' + ss;
-        if (distance <= 300000 && !warned) {{
-          warned = true;
-          badge.style.background = '#fff4e0';
-          badge.style.color = '#d32f2f';
-          badge.style.borderColor = '#d32f2f';
-          badge.style.animation = 'pulse 1.4s infinite';
-        }}
-      }}
-      tick();
-      var timerHandle = setInterval(tick, 1000);
-    </script>
-    <style>
-      @keyframes pulse {{ 0%{{transform:scale(1);}} 50%{{transform:scale(1.05);}} 100%{{transform:scale(1);}} }}
-    </style>
-    """
-    st.iframe(html_code, height=56)
-
-def render_timer_and_check_timeout():
-    """Renders the timer if a test is active with a deadline, and returns True
-    if the deadline has already passed as of THIS server-side check (this is
-    the authoritative check — the JS badge above is purely visual)."""
-    if not (st.session_state.test_active and st.session_state.end_timestamp):
-        return False
-    remaining = time_remaining_seconds()
-    render_timer_iframe(st.session_state.end_timestamp)
-    return remaining is not None and remaining <= 0
+@st.fragment(run_every=1)
+def live_timer():
+    if st.session_state.test_active and st.session_state.end_timestamp:
+        time_left = st.session_state.end_timestamp - time.time()
+        
+        if time_left <= 0:
+            if not st.session_state.time_is_up:
+                st.session_state.time_is_up = True
+                st.rerun() 
+        else:
+            mins, secs = divmod(int(time_left), 60)
+            if time_left <= 300: # 5 minutes warning
+                st.warning(f"⏳ সময় বাকি: {mins:02d} : {secs:02d}")
+            else:
+                st.info(f"⏳ সময় বাকি: {mins:02d} : {secs:02d}")
 
 # -----------------------------------------------------------------------------
 # 6. SIDEBAR NAVIGATION
@@ -506,12 +454,7 @@ elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
 
         st.markdown('<div class="app-header"><h2>✍️ লাইভ সেলফ-অ্যাসেসমেন্ট</h2></div>', unsafe_allow_html=True)
 
-        # Authoritative server-side timeout check happens on every rerun. As
-        # long as the user is interacting (answering questions), this catches
-        # the timeout promptly; there is no reliance on a JS->Python bridge.
-        timed_out_now = render_timer_and_check_timeout()
-        if timed_out_now:
-            st.session_state.time_is_up = True
+        live_timer()
 
         st.progress(progress_frac, text=f"অগ্রগতি: {st.session_state.current_q_index}/{total_q}")
 
@@ -609,15 +552,6 @@ elif app_mode == "লাইভ পরীক্ষা (Live MCQ)":
                                     link_html = f' <a href="{record["source_url"]}" target="_blank" class="source-link-icon" title="সূত্র দেখুন">🔗</a>'
                                 st.markdown(f'<span>💡 {record["explanation"]}{link_html}</span>', unsafe_allow_html=True)
 
-            # Client-side ticking fallback: if the tab is left idle past the
-            # deadline with no answer submitted, this lightweight auto-refresh
-            # nudges a rerun once time is close to elapsing so the
-            # server-side check above catches it without manual interaction.
-            if st.session_state.end_timestamp:
-                remaining = time_remaining_seconds()
-                if remaining is not None and 0 < remaining <= 65:
-                    time.sleep(min(remaining + 0.5, 3))
-                    st.rerun()
 
 # -----------------------------------------------------------------------------
 # 9. MODE 3 — PROGRESS HISTORY
