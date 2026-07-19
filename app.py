@@ -277,9 +277,9 @@ def inject_css():
     html, body, [class*="css"] { font-family: 'Hind Siliguri', 'Inter', 'Segoe UI', sans-serif !important; }
 
     :root {
-        --accent-1: #6366f1;
-        --accent-2: #8b5cf6;
-        --accent-3: #ec4899;
+        --accent-1: #0f3460;
+        --accent-2: #0f7f8f;
+        --accent-3: #14b8a6;
         --ok: #10b981;
         --warn: #f59e0b;
         --danger: #ef4444;
@@ -290,13 +290,15 @@ def inject_css():
     @keyframes popIn { from {opacity:0; transform: scale(.92);} to {opacity:1; transform: scale(1);} }
     @keyframes floatUp { 0%{transform:translateY(0);} 50%{transform:translateY(-4px);} 100%{transform:translateY(0);} }
 
-    #MainMenu, footer { visibility: hidden; }
+    footer { visibility: hidden; }
+    /* Note: the Streamlit hamburger menu (top-right) is intentionally left visible —
+       it's where the native light/dark theme toggle lives (Settings > Theme). */
 
     /* ---------- Hero header ---------- */
     .app-hero {
-        background: linear-gradient(120deg, var(--accent-1) 0%, var(--accent-2) 55%, var(--accent-3) 100%);
+        background: linear-gradient(120deg, var(--accent-1) 0%, var(--accent-2) 60%, var(--accent-3) 100%);
         padding: 30px 34px; border-radius: 22px; color: #fff !important; margin-bottom: 24px;
-        box-shadow: 0 14px 34px rgba(99,102,241,0.28); animation: fadeIn .45s ease;
+        box-shadow: 0 14px 34px rgba(15,52,96,0.30); animation: fadeIn .45s ease;
         position: relative; overflow: hidden;
     }
     .app-hero::after {
@@ -341,13 +343,13 @@ def inject_css():
         padding: 11px 16px; margin-bottom: 9px; transition: all .18s ease;
     }
     div[role="radiogroup"] label:hover {
-        border-color: var(--accent-2); background: rgba(139,92,246,0.08); transform: translateX(3px);
+        border-color: var(--accent-2); background: rgba(15,127,143,0.10); transform: translateX(3px);
     }
 
     .stButton>button {
         border-radius: 11px; font-weight: 600; transition: all .18s ease; border: none;
     }
-    .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(99,102,241,0.28); }
+    .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(15,52,96,0.28); }
     .stButton>button[kind="primary"] {
         background: linear-gradient(120deg, var(--accent-1), var(--accent-2)) !important;
     }
@@ -364,7 +366,7 @@ def inject_css():
         background: transparent; border: none; border-radius: 10px; padding: 9px 12px;
     }
     section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
-        background: rgba(139,92,246,0.12); transform: none;
+        background: rgba(20,184,166,0.14); transform: none;
     }
 
     /* ---------- Countdown ring ---------- */
