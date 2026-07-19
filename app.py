@@ -196,6 +196,7 @@ def compute_streak(history_df):
 def init_state():
     defaults = {
         "nav_mode": "🏠 হোম (Dashboard)",
+        "pending_nav": None,
         "test_active": False,
         "question_queue": [],
         "question_bank": {},
@@ -222,6 +223,15 @@ def init_state():
             st.session_state[k] = v
 
 init_state()
+
+# A widget's session_state key can't be reassigned after that widget has already
+# been instantiated in the same run. The sidebar radio below owns "nav_mode", so
+# any programmatic navigation (e.g. dashboard quick-start buttons, which render
+# *after* the sidebar) must queue the change here and rerun, applying it before
+# the radio widget is created on the next run.
+if st.session_state.pending_nav is not None:
+    st.session_state.nav_mode = st.session_state.pending_nav
+    st.session_state.pending_nav = None
 
 def load_current_mcq():
     idx = st.session_state.current_q_index
@@ -508,7 +518,7 @@ if app_mode == "🏠 হোম (Dashboard)":
             st.markdown(f'<div class="quick-card"><h4>{title}</h4><p>{desc}</p></div>', unsafe_allow_html=True)
             if st.button("শুরু করুন", key=f"quick_{title}", use_container_width=True, type="primary"):
                 if start_test(cat_id, q_limit, t_limit, label):
-                    st.session_state.nav_mode = "✍️ লাইভ পরীক্ষা (Live MCQ)"
+                    st.session_state.pending_nav = "✍️ লাইভ পরীক্ষা (Live MCQ)"
                     st.rerun()
 
     if not history_df.empty:
